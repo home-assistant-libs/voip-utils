@@ -16,3 +16,5 @@ venv/
 # Visual Studio Code
 .vscode/*
 !.vscode/tasks.json
+
+dist/

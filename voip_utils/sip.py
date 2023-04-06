@@ -19,7 +19,8 @@ _OPUS_PAYLOAD = "123"
 class SdpInfo:
     """Information for Session Description Protocol (SDP)."""
 
-    originator: str
+    username: str
+    id: int
     session_name: str
     version: str
 
@@ -117,7 +118,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         # See: https://datatracker.ietf.org/doc/html/rfc2327
         body_lines = [
             "v=0",
-            f"o={self.sdp_info.originator} {self.sdp_info.id} 1 IN IP4 {call_info.server_ip}",
+            f"o={self.sdp_info.username} {self.sdp_info.id} 1 IN IP4 {call_info.server_ip}",
             f"s={self.sdp_info.session_name}",
             f"c=IN IP4 {call_info.server_ip}",
             "t=0 0",
@@ -139,7 +140,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             "Content-Length": len(body),
             "CSeq": call_info.headers["cseq"],
             "Contact": call_info.headers["contact"],
-            "User-Agent": f"{self.sdp_info.originator} {self.sdp_info.version}",
+            "User-Agent": f"{self.sdp_info.username} {self.sdp_info.id} {self.sdp_info.version}",
             "Allow": "INVITE, ACK, BYE, CANCEL, OPTIONS",
         }
         response_lines = ["SIP/2.0 200 OK"]

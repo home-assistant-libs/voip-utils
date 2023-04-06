@@ -2,8 +2,6 @@
 import asyncio
 import logging
 import socket
-import time
-import wave
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Callable, Set
@@ -109,56 +107,12 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def on_chunk(self, audio_bytes: bytes) -> None:
         """Handle raw audio chunk."""
 
-    def send_wav(
+    async def send_audio(
         self,
-        wav_file: wave.Wave_read,
-        addr: Any = None,
-        sleep_ratio: float = 0.99,
-        silence_before: float = 0.0,
-    ) -> None:
-        """Send audio from WAV file in chunks over RTP."""
-        if self.transport is None:
-            raise ValueError("Transport not set")
-
-        addr = addr or self.addr
-        if addr is None:
-            raise ValueError("Destination address not set")
-
-        # Pause before sending to allow time for user to pick up phone.
-        time.sleep(silence_before)
-
-        rate = wav_file.getframerate()
-        width = wav_file.getsampwidth()
-        channels = wav_file.getnchannels()
-        frames_left = wav_file.getnframes()
-        seconds_per_rtp = self._rtp_output.opus_frame_size / self._rtp_output.opus_rate
-
-        while chunk := wav_file.readframes(self._rtp_output.opus_frame_size):
-            frames_in_chunk = len(chunk) // (width * channels)
-            frames_left -= frames_in_chunk
-            for rtp_bytes in self._rtp_output.process_audio(
-                chunk,
-                rate,
-                width,
-                channels,
-                is_end=frames_left <= 0,
-            ):
-                # _LOGGER.debug(len(rtp_bytes))
-                self.transport.sendto(rtp_bytes, addr)
-
-                # Wait almost the full amount of time for the chunk.
-                #
-                # Sending too fast will cause the phone to skip chunks,
-                # since it doesn't seem to have a very large buffer.
-                #
-                # Sending too slow will cause audio artifacts if there is
-                # network jitter, which is why programs like GStreamer are
-                # much better at this.
-                time.sleep(seconds_per_rtp * sleep_ratio)
-
-    async def async_send_wav(
-        self,
-        wav_file: wave.Wave_read,
+        audio_bytes: bytes,
+        rate: int,
+        width: int,
+        channels: int,
         addr: Any = None,
         sleep_ratio: float = 0.99,
         silence_before: float = 0.0,
@@ -174,21 +128,24 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         # Pause before sending to allow time for user to pick up phone.
         await asyncio.sleep(silence_before)
 
-        rate = wav_file.getframerate()
-        width = wav_file.getsampwidth()
-        channels = wav_file.getnchannels()
-        frames_left = wav_file.getnframes()
+        bytes_per_sample = width * channels
+        bytes_per_frame = self._rtp_output.opus_frame_size * bytes_per_sample
         seconds_per_rtp = self._rtp_output.opus_frame_size / self._rtp_output.opus_rate
 
-        while chunk := wav_file.readframes(self._rtp_output.opus_frame_size):
-            frames_in_chunk = len(chunk) // (width * channels)
-            frames_left -= frames_in_chunk
+        sample_offset = 0
+        samples_left = len(audio_bytes) // bytes_per_sample
+        while samples_left > 0:
+            bytes_offset = sample_offset * bytes_per_sample
+            chunk = audio_bytes[bytes_offset : bytes_offset + bytes_per_frame]
+            samples_in_chunk = len(chunk) // bytes_per_sample
+            samples_left -= samples_in_chunk
+
             for rtp_bytes in self._rtp_output.process_audio(
                 chunk,
                 rate,
                 width,
                 channels,
-                is_end=frames_left <= 0,
+                is_end=samples_left <= 0,
             ):
                 # _LOGGER.debug(len(rtp_bytes))
                 self.transport.sendto(rtp_bytes, addr)
@@ -202,3 +159,5 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 # network jitter, which is why programs like GStreamer are
                 # much better at this.
                 await asyncio.sleep(seconds_per_rtp * sleep_ratio)
+
+            sample_offset += samples_in_chunk
