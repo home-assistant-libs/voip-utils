@@ -32,7 +32,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
     def on_call(self, call_info: CallInfo):
         """Answer incoming calls and start RTP server on a random port."""
         if not self.is_valid_call(call_info):
-            _LOGGER.warning("Call rejected: %s", call_info)
+            _LOGGER.debug("Call rejected: %s", call_info)
             return
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
