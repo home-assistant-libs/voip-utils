@@ -115,7 +115,7 @@ class RtpOpusOutput:
     opus_channels: int = 2
     opus_frame_size: int = 960  # samples per channel
     opus_payload: int = 123  # set by GrandStream
-    opus_bytes_per_frame: int = 960 * 2 * 2
+    opus_bytes_per_frame: int = 960 * 2 * 2  # 16-bit x stereo
 
     _rtp_flags: int = 0b10000000  # v2, no padding/extensions/CSRCs
     _rtp_sequence_num: int = 0
@@ -139,21 +139,6 @@ class RtpOpusOutput:
             self.opus_rate,
             self.opus_width,
             opuslib.APPLICATION_VOIP,
-        )
-        opuslib.api.encoder.encoder_ctl(
-            self._encoder,
-            opuslib.api.ctl.set_signal,
-            opuslib.SIGNAL_VOICE,
-        )
-        opuslib.api.encoder.encoder_ctl(
-            self._encoder,
-            opuslib.api.ctl.set_bandwidth,
-            opuslib.BANDWIDTH_WIDEBAND,  # for 16Khz
-        )
-        opuslib.api.encoder.encoder_ctl(
-            self._encoder,
-            opuslib.api.ctl.set_bitrate,
-            20_000,  # 16-20 kbit/s recommended for wideband
         )
 
         self.reset()
