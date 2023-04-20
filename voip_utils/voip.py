@@ -93,25 +93,40 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self._audio_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._rtp_input = RtpOpusInput()
         self._rtp_output = RtpOpusOutput()
+        self._is_connected: bool = False
+
+    def disconnect(self):
+        self._is_connected = False
+        if self.transport is None:
+            self.transport.close()
+            self.transport = None
 
     def connection_made(self, transport):
         """Server is ready."""
         self.transport = transport
+        self._is_connected = True
 
     def datagram_received(self, data, addr):
         """Decode RTP + OPUS into raw audio."""
+        if not self._is_connected:
+            return
+
         if self.addr is None:
             self.addr = addr
 
-        # STT expects 16Khz mono with 16-bit samples
-        audio_bytes = self._rtp_input.process_packet(
-            data,
-            self.rate,
-            self.width,
-            self.channels,
-        )
+        try:
+            # STT expects 16Khz mono with 16-bit samples
+            audio_bytes = self._rtp_input.process_packet(
+                data,
+                self.rate,
+                self.width,
+                self.channels,
+            )
 
-        self.on_chunk(audio_bytes)
+            self.on_chunk(audio_bytes)
+        except Exception as err:
+            self.disconnect()
+            raise err
 
     @abstractmethod
     def on_chunk(self, audio_bytes: bytes) -> None:
@@ -165,7 +180,11 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         # Send RTP in a steady stream, delaying between each packet to simulate real-time audio
         seconds_per_rtp = self._rtp_output.opus_frame_size / self._rtp_output.opus_rate
         for rtp_bytes in rtp_packets:
-            self.transport.sendto(rtp_bytes, addr)
+            if not self._is_connected:
+                break
+
+            if self.transport is not None:
+                self.transport.sendto(rtp_bytes, addr)
 
             # Wait almost the full amount of time for the chunk.
             #
