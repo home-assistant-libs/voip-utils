@@ -97,7 +97,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
     def disconnect(self):
         self._is_connected = False
-        if self.transport is None:
+        if self.transport is not None:
             self.transport.close()
             self.transport = None
 
