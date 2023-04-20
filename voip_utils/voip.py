@@ -4,7 +4,7 @@ import logging
 import socket
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Any, Callable, Set
+from typing import Any, Callable, Optional, Set
 
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
@@ -18,11 +18,15 @@ class VoipDatagramProtocol(SipDatagramProtocol):
     """UDP server for Voice over IP (VoIP)."""
 
     def __init__(
-        self, sdp_info: SdpInfo, protocol_factory: CallProtocolFactory
+        self,
+        sdp_info: SdpInfo,
+        valid_protocol_factory: CallProtocolFactory,
+        invalid_protocol_factory: Optional[CallProtocolFactory] = None,
     ) -> None:
         """Set up VoIP call handler."""
         super().__init__(sdp_info)
-        self.protocol_factory = protocol_factory
+        self.valid_protocol_factory = valid_protocol_factory
+        self.invalid_protocol_factory = invalid_protocol_factory
         self._tasks: Set[asyncio.Future[Any]] = set()
 
     def is_valid_call(self, call_info: CallInfo) -> bool:
@@ -31,7 +35,12 @@ class VoipDatagramProtocol(SipDatagramProtocol):
 
     def on_call(self, call_info: CallInfo):
         """Answer incoming calls and start RTP server on a random port."""
-        if not self.is_valid_call(call_info):
+        protocol_factory = (
+            self.valid_protocol_factory
+            if self.is_valid_call(call_info)
+            else self.invalid_protocol_factory
+        )
+        if protocol_factory is None:
             _LOGGER.debug("Call rejected: %s", call_info)
             return
 
@@ -51,7 +60,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         loop = asyncio.get_running_loop()
         task = asyncio.create_task(
             loop.create_datagram_endpoint(
-                partial(self.protocol_factory, call_info),
+                partial(protocol_factory, call_info),
                 (rtp_ip, rtp_port),
             )
         )
@@ -114,7 +123,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         width: int,
         channels: int,
         addr: Any = None,
-        sleep_ratio: float = 0.99,
+        sleep_ratio: float = 0.98,
         silence_before: float = 0.0,
     ) -> None:
         """Send audio from WAV file in chunks over RTP."""
