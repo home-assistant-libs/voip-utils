@@ -25,7 +25,7 @@ requires-python = ">=3.9.0"
 dependencies = ["opuslib==3.0.1"]
 
 [project.urls]
-"Source Code" = "https://github.com/home-assistant/intents"
+"Source Code" = "https://github.com/home-assistant-libs/voip-utils"
 
 [tool.setuptools]
 platforms = ["any"]
