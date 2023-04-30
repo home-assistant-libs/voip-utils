@@ -1,6 +1,7 @@
 """Implementation of SIP (Session Initiation Protocol)."""
 import asyncio
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -52,7 +53,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Handle INVITE SIP messages."""
         try:
             message = data.decode()
-            method, headers, body = self._parse_sip(message)
+            method, ruri, headers, body = self._parse_sip(message)
 
             if method and (method.lower() != "invite"):
                 # Not an INVITE message
@@ -81,13 +82,24 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             if caller_rtp_port is None:
                 raise VoipError("No caller RTP port")
 
-            # Extract our visible IP from SIP header.
-            # <sip:123.123.123.123:1234>;tag=...
-            sip_ip_str = headers["to"].partition(";")[0]
-            sip_ip_str = sip_ip_str[1:-1]
-            _sip, server_ip, _port = sip_ip_str.split(":", maxsplit=2)
+            # Extract host from ruri
+            # sip:user@123.123.123.123:1234
+            re_splituri = re.compile(
+                        '(?P<scheme>\w+):' #Scheme
+                        +'(?:(?P<user>[\w\.]+):?(?P<password>[\w\.]+)?@)?' #User:Password
+                        +'\[?(?P<host>' #Begin group host
+                            +'(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|' #IPv4 address Host Or
+                            +'(?:(?:[0-9a-fA-F]{1,4}):){7}[0-9a-fA-F]{1,4}|' #IPv6 address Host Or
+                            +'(?:(?:[0-9A-Za-z]+\.)+[0-9A-Za-z]+)'#Hostname string
+                        +')\]?:?' #End group host
+                        +'(?P<port>\d{1,6})?' #port
+                        +'(?:\;(?P<params>[^\?]*))?' # parameters
+                        +'(?:\?(?P<headers>.*))?' # headers
+                        )
+            re_uri = re_splituri.search(ruri)
+            server_ip = re_uri.group("host")
             if not is_ipv4_address(server_ip):
-                raise VoipError(f"Invalid IPv4 address in {sip_ip_str}")
+                raise VoipError(f"Invalid IPv4 address in {ruri}")
 
             self.on_call(
                 CallInfo(
@@ -168,6 +180,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         lines = message.splitlines()
 
         method: Optional[str] = None
+        ruri: Optional[str] = None
         headers: dict[str, str] = {}
         offset: int = 0
 
@@ -178,6 +191,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
             if i == 0:
                 method = line.split()[0]
+                ruri = line.split()[1]
             elif not line:
                 break
             else:
@@ -186,4 +200,4 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         body = message[offset:]
 
-        return method, headers, body
+        return method, ruri, headers, body
