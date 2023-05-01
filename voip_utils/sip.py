@@ -44,6 +44,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Set up SIP server."""
         self.sdp_info = sdp_info
         self.transport = None
+        self._opus_payload = _OPUS_PAYLOAD
 
     def connection_made(self, transport):
         """Server ready."""
@@ -58,6 +59,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             if method and (method.lower() != "invite"):
                 # Not an INVITE message
                 return
+
+            if not ruri:
+                raise ValueError("Empty receiver URI")
 
             caller_ip, caller_sip_port = addr
             _LOGGER.debug(
@@ -78,6 +82,17 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         parts = value.split()
                         if parts[0] == "audio":
                             caller_rtp_port = int(parts[1])
+                    elif key == "a" and value.startswith("rtpmap:"):
+                        # a=rtpmap:123 opus/48000/2
+                        codec_str = value.split(":", maxsplit=1)[1]
+                        codec_parts = codec_str.split()
+                        if (len(codec_parts) > 1) and (
+                            codec_parts[1].lower().startswith("opus")
+                        ):
+                            self._opus_payload = codec_parts[0]
+                            _LOGGER.debug(
+                                "Detected OPUS payload type as %s", self._opus_payload
+                            )
 
             if caller_rtp_port is None:
                 raise VoipError("No caller RTP port")
@@ -85,18 +100,21 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             # Extract host from ruri
             # sip:user@123.123.123.123:1234
             re_splituri = re.compile(
-                        '(?P<scheme>\w+):' #Scheme
-                        +'(?:(?P<user>[\w\.]+):?(?P<password>[\w\.]+)?@)?' #User:Password
-                        +'\[?(?P<host>' #Begin group host
-                            +'(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|' #IPv4 address Host Or
-                            +'(?:(?:[0-9a-fA-F]{1,4}):){7}[0-9a-fA-F]{1,4}|' #IPv6 address Host Or
-                            +'(?:(?:[0-9A-Za-z]+\.)+[0-9A-Za-z]+)'#Hostname string
-                        +')\]?:?' #End group host
-                        +'(?P<port>\d{1,6})?' #port
-                        +'(?:\;(?P<params>[^\?]*))?' # parameters
-                        +'(?:\?(?P<headers>.*))?' # headers
-                        )
+                r"(?P<scheme>\w+):"  # Scheme
+                + r"(?:(?P<user>[\w\.]+):?(?P<password>[\w\.]+)?@)?"  # User:Password
+                + r"\[?(?P<host>"  # Begin group host
+                + r"(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|"  # IPv4 address Host Or
+                + r"(?:(?:[0-9a-fA-F]{1,4}):){7}[0-9a-fA-F]{1,4}|"  # IPv6 address Host Or
+                + r"(?:(?:[0-9A-Za-z]+\.)+[0-9A-Za-z]+)"  # Hostname string
+                + r")\]?:?"  # End group host
+                + r"(?P<port>\d{1,6})?"  # port
+                + r"(?:\;(?P<params>[^\?]*))?"  # parameters
+                + r"(?:\?(?P<headers>.*))?"  # headers
+            )
             re_uri = re_splituri.search(ruri)
+            if re_uri is None:
+                raise ValueError("Receiver URI did not match expected pattern")
+
             server_ip = re_uri.group("host")
             if not is_ipv4_address(server_ip):
                 raise VoipError(f"Invalid IPv4 address in {ruri}")
@@ -134,7 +152,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"s={self.sdp_info.session_name}",
             f"c=IN IP4 {call_info.server_ip}",
             "t=0 0",
-            f"m=audio {server_rtp_port} RTP/AVP {_OPUS_PAYLOAD}",
+            f"m=audio {server_rtp_port} RTP/AVP {self._opus_payload}",
             f"a=rtpmap:{_OPUS_PAYLOAD} opus/48000/2",
             "a=ptime:20",
             "a=maxptime:150",
@@ -175,7 +193,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             server_rtp_port,
         )
 
-    def _parse_sip(self, message: str) -> Tuple[Optional[str], Dict[str, str], str]:
+    def _parse_sip(
+        self, message: str
+    ) -> Tuple[Optional[str], Optional[str], Dict[str, str], str]:
         """Parse SIP message and return method, headers, and body."""
         lines = message.splitlines()
 
@@ -190,8 +210,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 offset += len(line) + len(_CRLF)
 
             if i == 0:
-                method = line.split()[0]
-                ruri = line.split()[1]
+                line_parts = line.split()
+                method = line_parts[0]
+                ruri = line_parts[1]
             elif not line:
                 break
             else:
