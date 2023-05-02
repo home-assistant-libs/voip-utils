@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Callable, Optional, Set
 
+from .const import OPUS_PAYLOAD_TYPE
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
 
@@ -80,6 +81,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         rate: int = 16000,
         width: int = 2,
         channels: int = 1,
+        opus_payload_type: int = OPUS_PAYLOAD_TYPE,
     ) -> None:
         """Set up RTP server."""
         # Desired format for input audio
@@ -91,8 +93,8 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self.addr = None
 
         self._audio_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
-        self._rtp_input = RtpOpusInput()
-        self._rtp_output = RtpOpusOutput()
+        self._rtp_input = RtpOpusInput(opus_payload_type=opus_payload_type)
+        self._rtp_output = RtpOpusOutput(opus_payload_type=opus_payload_type)
         self._is_connected: bool = False
 
     def disconnect(self):

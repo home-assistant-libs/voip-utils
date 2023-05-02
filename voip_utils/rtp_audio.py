@@ -9,6 +9,7 @@ from typing import Any
 
 import opuslib
 
+from .const import OPUS_PAYLOAD_TYPE
 from .error import RtpError
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ class RtpOpusInput:
     opus_width: int = 2  # bytes
     opus_channels: int = 2
     opus_frame_size: int = 960  # samples per channel
-    opus_payload: int = 123  # set by GrandStream
+    opus_payload_type: int = OPUS_PAYLOAD_TYPE  # set by GrandStream
 
     def __post_init__(
         self,
@@ -56,9 +57,9 @@ class RtpOpusInput:
             raise RtpError("Padding and extension headers not supported")
 
         payload_type &= 0x7F  # Remove marker bit
-        if payload_type != self.opus_payload:
+        if payload_type != self.opus_payload_type:
             raise RtpError(
-                f"Expected payload type {self.opus_payload}, got {payload_type}"
+                f"Expected payload type {self.opus_payload_type}, got {payload_type}"
             )
 
         # Assume no padding, extension headers, etc.
@@ -114,7 +115,7 @@ class RtpOpusOutput:
     opus_width: int = 2  # bytes
     opus_channels: int = 2
     opus_frame_size: int = 960  # samples per channel
-    opus_payload: int = 123  # set by GrandStream
+    opus_payload_type: int = OPUS_PAYLOAD_TYPE  # set by GrandStream
     opus_bytes_per_frame: int = 960 * 2 * 2  # 16-bit x stereo
 
     _rtp_flags: int = 0b10000000  # v2, no padding/extensions/CSRCs
@@ -221,7 +222,7 @@ class RtpOpusOutput:
             rtp_bytes = struct.pack(
                 ">BBHLL",
                 self._rtp_flags,
-                self.opus_payload,
+                self.opus_payload_type,
                 self._rtp_sequence_num,
                 self._rtp_timestamp,
                 self._rtp_ssrc,

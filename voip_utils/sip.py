@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
+from .const import OPUS_PAYLOAD_TYPE
 from .error import VoipError
 from .util import is_ipv4_address
 
@@ -13,7 +14,6 @@ SIP_PORT = 5060
 
 _LOGGER = logging.getLogger(__name__)
 _CRLF = "\r\n"
-_OPUS_PAYLOAD = "123"
 
 
 @dataclass
@@ -35,6 +35,7 @@ class CallInfo:
     caller_rtp_port: int
     server_ip: str
     headers: dict[str, str]
+    opus_payload_type: int = OPUS_PAYLOAD_TYPE
 
 
 class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
@@ -44,7 +45,6 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Set up SIP server."""
         self.sdp_info = sdp_info
         self.transport = None
-        self._opus_payload = _OPUS_PAYLOAD
 
     def connection_made(self, transport):
         """Server ready."""
@@ -73,6 +73,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             # Extract caller's RTP port from SDP.
             # See: https://datatracker.ietf.org/doc/html/rfc2327
             caller_rtp_port: Optional[int] = None
+            opus_payload_type = OPUS_PAYLOAD_TYPE
             body_lines = body.splitlines()
             for line in body_lines:
                 line = line.strip()
@@ -89,9 +90,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         if (len(codec_parts) > 1) and (
                             codec_parts[1].lower().startswith("opus")
                         ):
-                            self._opus_payload = codec_parts[0]
+                            opus_payload_type = int(codec_parts[0])
                             _LOGGER.debug(
-                                "Detected OPUS payload type as %s", self._opus_payload
+                                "Detected OPUS payload type as %s", opus_payload_type
                             )
 
             if caller_rtp_port is None:
@@ -126,6 +127,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     caller_rtp_port=caller_rtp_port,
                     server_ip=server_ip,
                     headers=headers,
+                    opus_payload_type=opus_payload_type,
                 )
             )
         except Exception:
@@ -152,8 +154,8 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"s={self.sdp_info.session_name}",
             f"c=IN IP4 {call_info.server_ip}",
             "t=0 0",
-            f"m=audio {server_rtp_port} RTP/AVP {self._opus_payload}",
-            f"a=rtpmap:{self._opus_payload} opus/48000/2",
+            f"m=audio {server_rtp_port} RTP/AVP {call_info.opus_payload_type}",
+            f"a=rtpmap:{call_info.opus_payload_type} opus/48000/2",
             "a=ptime:20",
             "a=maxptime:150",
             "a=sendrecv",
