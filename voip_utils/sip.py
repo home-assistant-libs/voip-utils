@@ -153,7 +153,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"c=IN IP4 {call_info.server_ip}",
             "t=0 0",
             f"m=audio {server_rtp_port} RTP/AVP {self._opus_payload}",
-            f"a=rtpmap:{_OPUS_PAYLOAD} opus/48000/2",
+            f"a=rtpmap:{self._opus_payload} opus/48000/2",
             "a=ptime:20",
             "a=maxptime:150",
             "a=sendrecv",
