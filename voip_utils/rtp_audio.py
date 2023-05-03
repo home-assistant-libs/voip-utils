@@ -57,10 +57,6 @@ class RtpOpusInput:
             raise RtpError("Padding and extension headers not supported")
 
         payload_type &= 0x7F  # Remove marker bit
-        if payload_type != self.opus_payload_type:
-            raise RtpError(
-                f"Expected payload type {self.opus_payload_type}, got {payload_type}"
-            )
 
         # Assume no padding, extension headers, etc.
         opus_bytes = rtp_bytes[12:]
