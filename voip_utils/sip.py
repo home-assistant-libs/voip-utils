@@ -164,7 +164,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             "a=ptime:20",
             "a=maxptime:150",
             "a=sendrecv",
-            _CRLF,
+            "",
         ]
         body = _CRLF.join(body_lines)
 
