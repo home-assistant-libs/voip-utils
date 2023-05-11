@@ -54,6 +54,11 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Handle INVITE SIP messages."""
         try:
             message = data.decode()
+
+            if message == '\r\n\r\n':
+                _LOGGER.debug("keepalive")
+                return
+
             method, ruri, headers, body = self._parse_sip(message)
 
             if method and (method.lower() != "invite"):
