@@ -58,6 +58,9 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             rtp_port,
         )
 
+        # Close socket to free port for re-use
+        sock.close()
+
         # Handle RTP packets in RTP server
         loop = asyncio.get_running_loop()
         task = asyncio.create_task(
@@ -71,9 +74,6 @@ class VoipDatagramProtocol(SipDatagramProtocol):
 
         # Tell caller to start sending/receiving RTP audio
         self.answer(call_info, rtp_port)
-
-        # Close socket to free port for re-use
-        sock.close()
 
 
 class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
