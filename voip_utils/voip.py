@@ -50,7 +50,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         sock.setblocking(False)
 
         # Bind to a random UDP port
-        sock.bind((call_info.server_ip, 0))
+        sock.bind(("", 0))
         rtp_ip, rtp_port = sock.getsockname()
         _LOGGER.debug(
             "Starting RTP server on ip=%s, port=%s",
