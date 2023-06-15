@@ -2,8 +2,10 @@
 import asyncio
 import logging
 import socket
+import struct
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Optional, Set
 
@@ -12,8 +14,17 @@ from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
 
 _LOGGER = logging.getLogger(__name__)
+_RTCP_BYE = 203
 
-CallProtocolFactory = Callable[[CallInfo], asyncio.Protocol]
+
+@dataclass
+class RtcpState:
+    """State of a call according to RTCP packets received."""
+
+    bye_callback: Optional[Callable[[], None]] = None
+
+
+CallProtocolFactory = Callable[[CallInfo, RtcpState], asyncio.Protocol]
 
 
 class VoipDatagramProtocol(SipDatagramProtocol):
@@ -46,34 +57,75 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             _LOGGER.debug("Call rejected: %s", call_info)
             return
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setblocking(False)
+        # Find free RTP/RTCP ports
+        rtp_ip = ""
+        rtp_port = 0
 
-        # Bind to a random UDP port
-        sock.bind(("", 0))
-        rtp_ip, rtp_port = sock.getsockname()
+        while True:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+
+            # Bind to a random UDP port
+            sock.bind(("", 0))
+            rtp_ip, rtp_port = sock.getsockname()
+
+            # Close socket to free port for re-use
+            sock.close()
+
+            # Check that the next port up is available for RTCP
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.bind(("", rtp_port + 1))
+
+                # Will be opened again below
+                sock.close()
+
+                # Found our ports
+                break
+            except OSError:
+                # RTCP port is taken
+                pass
+
         _LOGGER.debug(
-            "Starting RTP server on ip=%s, port=%s",
+            "Starting RTP server on ip=%s, rtp_port=%s, rtcp_port=%s",
             rtp_ip,
             rtp_port,
+            rtp_port + 1,
         )
-
-        # Close socket to free port for re-use
-        sock.close()
 
         # Handle RTP packets in RTP server
-        loop = asyncio.get_running_loop()
-        task = asyncio.create_task(
-            loop.create_datagram_endpoint(
-                partial(protocol_factory, call_info),
-                (rtp_ip, rtp_port),
-            )
+        rtp_task = asyncio.create_task(
+            self._create_rtp_server(protocol_factory, call_info, rtp_ip, rtp_port)
         )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.remove)
+        self._tasks.add(rtp_task)
+        rtp_task.add_done_callback(self._tasks.remove)
 
         # Tell caller to start sending/receiving RTP audio
         self.answer(call_info, rtp_port)
+
+    async def _create_rtp_server(
+        self,
+        protocol_factory: CallProtocolFactory,
+        call_info: CallInfo,
+        rtp_ip: str,
+        rtp_port: int,
+    ):
+        # Shared state between RTP/RTCP servers
+        rtcp_state = RtcpState()
+
+        loop = asyncio.get_running_loop()
+
+        # RTCP server
+        await loop.create_datagram_endpoint(
+            lambda: RtcpDatagramProtocol(rtcp_state),
+            (rtp_ip, rtp_port + 1),
+        )
+
+        # RTP server
+        await loop.create_datagram_endpoint(
+            partial(protocol_factory, call_info, rtcp_state),
+            (rtp_ip, rtp_port),
+        )
 
 
 class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
@@ -81,12 +133,18 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
     def __init__(
         self,
+        rtcp_state: RtcpState,
         rate: int = 16000,
         width: int = 2,
         channels: int = 1,
         opus_payload_type: int = OPUS_PAYLOAD_TYPE,
     ) -> None:
         """Set up RTP server."""
+        self.rtcp_state = rtcp_state
+
+        # Automatically disconnect when BYE is received over RTCP
+        self.rtcp_state.bye_callback = self.disconnect
+
         # Desired format for input audio
         self.rate = rate
         self.width = width
@@ -148,8 +206,8 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         silence_before: float = 0.0,
     ) -> None:
         """Send audio from WAV file in chunks over RTP."""
-        if self.transport is None:
-            raise ValueError("Transport not set")
+        if not self._is_connected:
+            return
 
         addr = addr or self.addr
         if addr is None:
@@ -200,3 +258,48 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             # network jitter, which is why programs like GStreamer are
             # much better at this.
             time.sleep(seconds_per_rtp * sleep_ratio)
+
+
+class RtcpDatagramProtocol(asyncio.DatagramProtocol, ABC):
+    """UDP server for the Real-time Transport Control Protocol (RTCP)."""
+
+    def __init__(self, state: RtcpState) -> None:
+        """Set up RTCP server."""
+        self.transport = None
+        self.state = state
+        self._is_connected = False
+
+    def connection_made(self, transport):
+        """Server ready."""
+        self.transport = transport
+        self._is_connected = True
+
+    def disconnect(self):
+        self._is_connected = False
+        if self.transport is not None:
+            self.transport.close()
+            self.transport = None
+
+    def datagram_received(self, data: bytes, addr):
+        """Handle INVITE SIP messages."""
+        if not self._is_connected:
+            return
+
+        try:
+            if len(data) < 8:
+                raise ValueError("RTCP packet is too small")
+
+            # See: https://en.wikipedia.org/wiki/RTP_Control_Protocol#Packet_header
+            _flags, packet_type, _packet_length, _ssrc = struct.unpack(
+                ">BBHL", data[:8]
+            )
+
+            if packet_type == _RTCP_BYE:
+                _LOGGER.debug("Received BYE message via RTCP from %s", addr)
+                self.disconnect()
+
+                if self.state.bye_callback is not None:
+                    self.state.bye_callback()
+
+        except Exception:
+            _LOGGER.exception("Unexpected error handling RTCP packet")

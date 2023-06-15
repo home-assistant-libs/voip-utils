@@ -37,6 +37,11 @@ class CallInfo:
     headers: dict[str, str]
     opus_payload_type: int = OPUS_PAYLOAD_TYPE
 
+    @property
+    def caller_rtcp_port(self) -> int:
+        """Real-time Transport Control Protocol (RTCP) port."""
+        return self.caller_rtp_port + 1
+
 
 class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     """UDP server for the Session Initiation Protocol (SIP)."""
@@ -53,17 +58,20 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def datagram_received(self, data: bytes, addr):
         """Handle INVITE SIP messages."""
         try:
+            caller_ip, caller_sip_port = addr
             message = data.decode()
             method, ruri, headers, body = self._parse_sip(message)
 
-            if method and (method.lower() != "invite"):
+            if method:
+                method = method.lower()
+
+            if method != "invite":
                 # Not an INVITE message
                 return
 
             if not ruri:
                 raise ValueError("Empty receiver URI")
 
-            caller_ip, caller_sip_port = addr
             _LOGGER.debug(
                 "Incoming call from ip=%s, port=%s",
                 caller_ip,
