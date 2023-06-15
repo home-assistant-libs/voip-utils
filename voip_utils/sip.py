@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -53,7 +54,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def datagram_received(self, data: bytes, addr):
         """Handle INVITE SIP messages."""
         try:
-            message = data.decode()
+            message = data.decode("utf-8")
             method, ruri, headers, body = self._parse_sip(message)
 
             if method and (method.lower() != "invite"):
@@ -224,3 +225,111 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         body = message[offset:]
 
         return method, ruri, headers, body
+
+
+class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
+    def __init__(
+        self, sdp_info: SdpInfo, loop: Optional[asyncio.AbstractEventLoop] = None
+    ) -> None:
+        self.sdp_info = sdp_info
+        self.transport = None
+        self._closed_event = asyncio.Event()
+        self._loop = loop if loop is not None else asyncio.get_running_loop()
+        self._session_id = str(time.monotonic_ns())
+        self._session_version = str(time.monotonic_ns())
+        self._call_id = str(time.monotonic_ns())
+        self._request_uri = "sip:user@192.168.68.75"
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+        username = "test2"
+
+        sdp_lines = [
+            "v=0",
+            f"o={username} {self._session_id} {self._session_version} IN IP4 192.168.68.75",
+            "s=SIP Call",
+            "c=IN IP4 192.168.68.75",
+            "t=0 0",
+            "m=audio 5004 RTP/AVP 123",
+            "a=sendrecv",
+            "a=rtpmap:123 opus/48000/2",
+            "a=fmtp:123 maxplaybackrate=16000",
+            "a=ptime:20",
+            "",
+        ]
+        sdp_text = _CRLF.join(sdp_lines)
+        sdp_bytes = sdp_text.encode("utf-8")
+
+        invite_lines = [
+            f"INVITE {self._request_uri} SIP/2.0",
+            "Via: SIP/2.0/UDP 192.168.68.75",
+            "From: <sip:IPCall@192.168.68.65:5060>",
+            "To: <sip:192.168.68.82:5060>",
+            f"Call-ID: {self._call_id}",
+            "CSeq: 50 INVITE",
+            "User-Agent: test-agent 1.0",
+            "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
+            "Accept: application/sdp, application/dtmf-relay",
+            "Content-Type: application/sdp",
+            f"Content-Length: {len(sdp_bytes)}",
+            "",
+        ]
+        invite_text = _CRLF.join(invite_lines) + _CRLF
+        invite_bytes = invite_text.encode("utf-8")
+
+        print((invite_bytes + sdp_bytes).decode())
+
+        self.transport.sendto(
+            invite_bytes + sdp_bytes,
+            ("192.168.68.82", 5060),
+        )
+
+    def datagram_received(self, data: bytes, addr):
+        try:
+            response_text = data.decode("utf-8")
+            response_lines = response_text.splitlines()
+            print(response_lines)
+            is_ok = False
+
+            for i, line in enumerate(response_lines):
+                line = line.strip()
+                if i == 0:
+                    _version, code, response_type = line.split(maxsplit=2)
+                    if (code == "200") and (response_type == "OK"):
+                        is_ok = True
+                    else:
+                        _LOGGER.debug("Skipping message: %s", line)
+                elif not line:
+                    break
+
+            if is_ok:
+                _LOGGER.debug("Got OK message")
+                if self.transport is not None:
+                    bye_lines = [
+                        f"BYE {self._request_uri} SIP/2.0",
+                        "Via: SIP/2.0/UDP 192.168.68.75",
+                        "From: <sip:IPCall@192.168.68.65:5060>",
+                        "To: <sip:192.168.68.82:5060>",
+                        f"Call-ID: {self._call_id}",
+                        "CSeq: 51 BYE",
+                        "User-Agent: test-agent 1.0",
+                        "Content-Length: 0",
+                        "",
+                    ]
+                    bye_text = _CRLF.join(bye_lines) + _CRLF
+                    bye_bytes = bye_text.encode("utf-8")
+                    self.transport.sendto(bye_bytes, ("192.168.68.82", 5060))
+
+                    self.transport.close()
+                    self.transport = None
+        except Exception:
+            _LOGGER.exception("Unexpected error handling SIP response")
+
+    def connection_lost(self, exc):
+        """Signal wait_closed when transport is completely closed."""
+        self._loop.call_soon_threadsafe(self._closed_event.set)
+
+    async def wait_closed(self) -> None:
+        """Wait for connection_lost to be called."""
+        await self._closed_event.wait()
