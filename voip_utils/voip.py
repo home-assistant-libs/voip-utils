@@ -133,17 +133,18 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
     def __init__(
         self,
-        rtcp_state: RtcpState,
         rate: int = 16000,
         width: int = 2,
         channels: int = 1,
         opus_payload_type: int = OPUS_PAYLOAD_TYPE,
+        rtcp_state: Optional[RtcpState] = None,
     ) -> None:
         """Set up RTP server."""
         self.rtcp_state = rtcp_state
 
-        # Automatically disconnect when BYE is received over RTCP
-        self.rtcp_state.bye_callback = self.disconnect
+        if self.rtcp_state is not None:
+            # Automatically disconnect when BYE is received over RTCP
+            self.rtcp_state.bye_callback = self.disconnect
 
         # Desired format for input audio
         self.rate = rate
