@@ -53,6 +53,10 @@ class RtpOpusInput:
             ">BBHLL", rtp_bytes[:12]
         )
 
+        if flags == 0b0 and payload_type == 1:
+            _LOGGER.debug("STUN Binding Request")
+            return
+
         if flags != 0b10000000:
             raise RtpError("Padding and extension headers not supported")
 
