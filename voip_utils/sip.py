@@ -33,6 +33,8 @@ class CallInfo:
     caller_ip: str
     caller_sip_port: int
     caller_rtp_port: int
+    caller_endpoint: str
+    caller_name: str
     server_ip: str
     headers: dict[str, str]
     opus_payload_type: int = OPUS_PAYLOAD_TYPE
@@ -61,6 +63,13 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             caller_ip, caller_sip_port = addr
             message = data.decode()
             method, ruri, headers, body = self._parse_sip(message)
+            _LOGGER.debug(
+                "Received datagram method=%s, ruri=%s, headers=%s, body=%s",
+                method,
+                ruri,
+                headers,
+                body
+            )
 
             if method:
                 method = method.lower()
@@ -72,10 +81,17 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             if not ruri:
                 raise ValueError("Empty receiver URI")
 
+            caller_endpoint = None
+            caller_name = None 
+            if (headers.get('user-agent') is not None and "Asterisk" in headers.get('user-agent')):
+                caller_endpoint, caller_name = self._parse_from_header(headers.get('from'))
+
             _LOGGER.debug(
-                "Incoming call from ip=%s, port=%s",
+                "Incoming call from ip=%s, port=%s, endpoint=%s, name=%s",
                 caller_ip,
                 caller_sip_port,
+                caller_endpoint,
+                caller_name
             )
 
             # Extract caller's RTP port from SDP.
@@ -133,6 +149,8 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     caller_ip=caller_ip,
                     caller_sip_port=caller_sip_port,
                     caller_rtp_port=caller_rtp_port,
+                    caller_endpoint = caller_endpoint,
+                    caller_name = caller_name,
                     server_ip=server_ip,
                     headers=headers,
                     opus_payload_type=opus_payload_type,
@@ -202,6 +220,26 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             call_info.caller_sip_port,
             server_rtp_port,
         )
+
+    def _parse_from_header(
+        self, header: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Parse SIP FROM Header and return endpoint and name."""
+        endpoint: Optional[str] = None
+        name: Optional[str] = None
+
+        if header is None:
+            return endpoint, name
+
+        from_header_pattern = re.compile(r'\s*((?P<name>\b\w+\b|"[^"]+")\s+)?<?sips?:(?P<endpoint>[^@]+).*')
+        from_header_match = from_header_pattern.match(header)
+        if from_header_match is not None:
+            name_token = from_header_match.group('name')
+            if name_token is not None:
+                name = name_token.strip('"')
+            endpoint = from_header_match.group('endpoint')
+
+        return endpoint, name
 
     def _parse_sip(
         self, message: str
