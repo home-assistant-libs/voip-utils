@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from .sip import CallPhoneDatagramProtocol
+from .sip import CallPhoneDatagramProtocol, CALL_SRC_IP
 
 
 async def main() -> None:
@@ -10,7 +10,7 @@ async def main() -> None:
     loop = asyncio.get_event_loop()
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: CallPhoneDatagramProtocol(None),
-        local_addr=("192.168.68.75", 5060),
+        local_addr=(CALL_SRC_IP, 5060),
     )
 
     await protocol.wait_closed()
