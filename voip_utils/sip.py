@@ -286,6 +286,10 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         return method, ruri, headers, body
 
 
+CALL_SRC_IP = "192.168.1.100"
+CALL_VIA_IP = "192.168.1.101"
+CALL_DEST_IP = "192.168.1.102"
+
 class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def __init__(
         self, sdp_info: SdpInfo, loop: Optional[asyncio.AbstractEventLoop] = None
@@ -297,7 +301,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self._session_id = str(time.monotonic_ns())
         self._session_version = str(time.monotonic_ns())
         self._call_id = str(time.monotonic_ns())
-        self._request_uri = "sip:user@192.168.68.75"
+        self._request_uri = f"sip:user@{CALL_SRC_IP}"
 
     def connection_made(self, transport):
         self.transport = transport
@@ -306,9 +310,9 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         sdp_lines = [
             "v=0",
-            f"o={username} {self._session_id} {self._session_version} IN IP4 192.168.68.75",
+            f"o={username} {self._session_id} {self._session_version} IN IP4 {CALL_SRC_IP}",
             "s=SIP Call",
-            "c=IN IP4 192.168.68.75",
+            f"c=IN IP4 {CALL_SRC_IP}",
             "t=0 0",
             "m=audio 5004 RTP/AVP 123",
             "a=sendrecv",
@@ -322,9 +326,9 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         invite_lines = [
             f"INVITE {self._request_uri} SIP/2.0",
-            "Via: SIP/2.0/UDP 192.168.68.75",
-            "From: <sip:IPCall@192.168.68.65:5060>",
-            "To: <sip:192.168.68.82:5060>",
+            f"Via: SIP/2.0/UDP {CALL_VIA_IP}",
+            f"From: <sip:IPCall@{CALL_SRC_IP}:5060>",
+            f"To: <sip:{CALL_DEST_IP}:5060>",
             f"Call-ID: {self._call_id}",
             "CSeq: 50 INVITE",
             "User-Agent: test-agent 1.0",
@@ -341,7 +345,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         self.transport.sendto(
             invite_bytes + sdp_bytes,
-            ("192.168.68.82", 5060),
+            (CALL_DEST_IP, 5060),
         )
 
     def datagram_received(self, data: bytes, addr):
@@ -367,9 +371,9 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 if self.transport is not None:
                     bye_lines = [
                         f"BYE {self._request_uri} SIP/2.0",
-                        "Via: SIP/2.0/UDP 192.168.68.75",
-                        "From: <sip:IPCall@192.168.68.65:5060>",
-                        "To: <sip:192.168.68.82:5060>",
+                        f"Via: SIP/2.0/UDP {CALL_VIA_IP}",
+                        f"From: <sip:IPCall@{CALL_SRC_IP}:5060>",
+                        f"To: <sip:{CALL_DEST_IP}:5060>",
                         f"Call-ID: {self._call_id}",
                         "CSeq: 51 BYE",
                         "User-Agent: test-agent 1.0",
@@ -378,7 +382,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     ]
                     bye_text = _CRLF.join(bye_lines) + _CRLF
                     bye_bytes = bye_text.encode("utf-8")
-                    self.transport.sendto(bye_bytes, ("192.168.68.82", 5060))
+                    self.transport.sendto(bye_bytes, (CALL_DEST_IP, 5060))
 
                     self.transport.close()
                     self.transport = None
