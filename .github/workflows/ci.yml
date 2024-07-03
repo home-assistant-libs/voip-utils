@@ -26,5 +26,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-      - run: pip3 install  -r requirements.txt -r requirements_dev.txt
+      - run: script/setup
+      - run: script/lint
       - run: pytest tests
