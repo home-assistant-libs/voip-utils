@@ -1,5 +1,6 @@
 """Utility for converting audio to/from RTP + OPUS packets."""
-import audioop
+
+import audioop  # pylint: disable=deprecated-module
 import logging
 import random
 import struct

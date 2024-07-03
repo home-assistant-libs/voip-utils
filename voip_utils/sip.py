@@ -1,4 +1,7 @@
 """Implementation of SIP (Session Initiation Protocol)."""
+
+from __future__ import annotations
+
 import asyncio
 import logging
 import re
@@ -33,8 +36,8 @@ class CallInfo:
     caller_ip: str
     caller_sip_port: int
     caller_rtp_port: int
-    caller_uri: str
-    caller_name: str
+    caller_uri: str | None
+    caller_name: str | None
     server_ip: str
     headers: dict[str, str]
     opus_payload_type: int = OPUS_PAYLOAD_TYPE
@@ -68,7 +71,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 method,
                 ruri,
                 headers,
-                body
+                body,
             )
 
             if method:
@@ -84,11 +87,11 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             caller_uri = None
             caller_name = None
             # The Contact header should give us the URI used for sending SIP messages to the device
-            if (headers.get('contact') is not None):
-                caller_uri, caller_name = self._parse_uri_header(headers.get('contact'))
+            if headers.get("contact") is not None:
+                caller_uri, caller_name = self._parse_uri_header(headers.get("contact"))
             # We can try using the From header as a fallback
-            elif (headers.get('from') is not None):
-                caller_uri, caller_name = self._parse_uri_header(headers.get('from'))
+            elif headers.get("from") is not None:
+                caller_uri, caller_name = self._parse_uri_header(headers.get("from"))
             # If all else fails try to generate a URI based on the IP and port from the address the message came from
             else:
                 caller_uri = "sip:" + caller_ip + ":" + caller_sip_port
@@ -99,7 +102,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 caller_ip,
                 caller_sip_port,
                 caller_uri,
-                caller_name
+                caller_name,
             )
 
             # Extract caller's RTP port from SDP.
@@ -230,7 +233,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         )
 
     def _parse_uri_header(
-        header: str
+        self, header: str | None
     ) -> Tuple[Optional[str], Optional[str]]:
         """Parse SIP Contact/From Header and return endpoint URI and name."""
         uri: Optional[str] = None
@@ -239,13 +242,15 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if header is None:
             return uri, name
 
-        header_pattern = re.compile(r'\s*((?P<name>\b\w+\b|"[^"]+")\s+)?<?(?P<uri>sips?:[^>]+)>?.*')
+        header_pattern = re.compile(
+            r'\s*((?P<name>\b\w+\b|"[^"]+")\s+)?<?(?P<uri>sips?:[^>]+)>?.*'
+        )
         header_match = header_pattern.match(header)
         if header_match is not None:
-            name_token = header_match.group('name')
+            name_token = header_match.group("name")
             if name_token is not None:
                 name = name_token.strip('"')
-            uri = header_match.group('uri')
+            uri = header_match.group("uri")
 
         return uri, name
 
