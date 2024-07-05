@@ -1,3 +1,4 @@
+
 """Implementation of SIP (Session Initiation Protocol)."""
 
 from __future__ import annotations
@@ -5,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import socket
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -27,6 +29,8 @@ class SdpInfo:
     id: int
     session_name: str
     version: str
+    server_address: str
+    prefer_ipv6: bool = True
 
 
 @dataclass
@@ -134,13 +138,13 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 raise VoipError("No caller RTP port")
 
             # Extract host from ruri
-            # sip:user@123.123.123.123:1234
+            # sip:user@[2001:db8::1]:1234 or sip:user@123.123.123.123:1234 or sip:user@hostname:1234
             re_splituri = re.compile(
                 r"(?P<scheme>\w+):"  # Scheme
                 + r"(?:(?P<user>[\w\.]+):?(?P<password>[\w\.]+)?@)?"  # User:Password
                 + r"\[?(?P<host>"  # Begin group host
                 + r"(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|"  # IPv4 address Host Or
-                + r"(?:(?:[0-9a-fA-F]{1,4}):){7}[0-9a-fA-F]{1,4}|"  # IPv6 address Host Or
+                + r"(?:(?=.*:)(?:[0-9a-fA-F]{0,4}:){0,7}[0-9a-fA-F]{0,4})|"  # IPv6 address Host Or
                 + r"(?:(?:[0-9A-Za-z]+\.)+[0-9A-Za-z]+)"  # Hostname string
                 + r")\]?:?"  # End group host
                 + r"(?P<port>\d{1,6})?"  # port
@@ -152,8 +156,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 raise ValueError("Receiver URI did not match expected pattern")
 
             server_ip = re_uri.group("host")
-            if not is_ipv4_address(server_ip):
-                raise VoipError(f"Invalid IPv4 address in {ruri}")
+            self.sdp_info.server_address = server_ip
 
             self.on_call(
                 CallInfo(
@@ -179,17 +182,20 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         call_info: CallInfo,
         server_rtp_port: int,
     ):
-        """Send OK message to caller with our IP and RTP port."""
         if self.transport is None:
             return
 
-        # SDP = Session Description Protocol
-        # See: https://datatracker.ietf.org/doc/html/rfc2327
+        # Resolve server_address if it's a hostname
+        if not (is_ipv4_address(self.sdp_info.server_address) or ":" in self.sdp_info.server_address):
+            self.sdp_info.server_address = resolve_hostname(self.sdp_info.server_address, self.sdp_info.prefer_ipv6)
+
+        address_type = "IP6" if ":" in self.sdp_info.server_address else "IP4"
+        
         body_lines = [
             "v=0",
-            f"o={self.sdp_info.username} {self.sdp_info.id} 1 IN IP4 {call_info.server_ip}",
+            f"o={self.sdp_info.username} {self.sdp_info.id} 1 IN {address_type} {self.sdp_info.server_address}",
             f"s={self.sdp_info.session_name}",
-            f"c=IN IP4 {call_info.server_ip}",
+            f"c=IN {address_type} {self.sdp_info.server_address}",
             "t=0 0",
             f"m=audio {server_rtp_port} RTP/AVP {call_info.opus_payload_type}",
             f"a=rtpmap:{call_info.opus_payload_type} opus/48000/2",
@@ -283,3 +289,17 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         body = message[offset:]
 
         return method, ruri, headers, body
+
+def resolve_hostname(hostname: str, prefer_ipv6: bool) -> str:
+    """Resolve hostname to an IP address, preferring IPv6 or IPv4 based on prefer_ipv6 flag."""
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+        for info in addr_info:
+            family, _, _, _, sockaddr = info
+            if prefer_ipv6 and family == socket.AF_INET6:
+                return sockaddr[0]
+            elif not prefer_ipv6 and family == socket.AF_INET:
+                return sockaddr[0]
+        return addr_info[0][-1][0]  # If no preferred address is found, use the first available address
+    except socket.gaierror:
+        raise VoipError(f"Hostname resolution failed for {hostname}")
