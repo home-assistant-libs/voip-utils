@@ -64,8 +64,8 @@ class SipEndpoint:
 
     host: str
     port: int
-    username: str
-    description: str
+    username: str | None
+    description: str | None
 
     @property
     def sip_uri(self) -> str:
@@ -346,7 +346,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def __init__(
         self,
-        sdp_info: SdpInfo,
+        sdp_info: SdpInfo | None,
         source: SipEndpoint,
         dest: SipEndpoint,
         rtp_port: int,

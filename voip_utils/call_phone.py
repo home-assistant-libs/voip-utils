@@ -16,11 +16,11 @@ _LOGGER = logging.getLogger(__name__)
 load_dotenv()
 
 CALL_SRC_USER = os.getenv("CALL_SRC_USER")
-CALL_SRC_IP = os.getenv("CALL_SRC_IP")
-CALL_SRC_PORT = int(os.getenv("CALL_SRC_PORT"))
+CALL_SRC_IP = os.getenv("CALL_SRC_IP", "127.0.0.1")
+CALL_SRC_PORT = int(os.getenv("CALL_SRC_PORT", 5060))
 CALL_VIA_IP = os.getenv("CALL_VIA_IP")
-CALL_DEST_IP = os.getenv("CALL_DEST_IP")
-CALL_DEST_PORT = int(os.getenv("CALL_DEST_PORT"))
+CALL_DEST_IP = os.getenv("CALL_DEST_IP", "127.0.0.1")
+CALL_DEST_PORT = int(os.getenv("CALL_DEST_PORT", 5060))
 CALL_DEST_USER = os.getenv("CALL_DEST_USER")
 
 
@@ -34,7 +34,7 @@ RTP_AUDIO_SETTINGS = {
     "sleep_ratio": 0.99,
 }
 
-CallProtocolFactory = Callable[[CallInfo, RtcpState], asyncio.Protocol]
+CallProtocolFactory = Callable[[CallInfo, RtcpState], asyncio.DatagramProtocol]
 
 
 class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
@@ -42,7 +42,7 @@ class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
 
     def __init__(
         self,
-        sdp_info: SdpInfo,
+        sdp_info: SdpInfo | None,
         source_endpoint: SipEndpoint,
         dest_endpoint: SipEndpoint,
         rtp_port: int,
@@ -130,7 +130,8 @@ class PreRecordMessageProtocol(RtpDatagramProtocol):
         self.message_delay = message_delay
         self.loop_delay = loop_delay
         self._audio_task: asyncio.Task | None = None
-        self._audio_bytes: bytes | None = None
+        file_path = Path(__file__).parent / self.file_name
+        self._audio_bytes: bytes = file_path.read_bytes()
         _LOGGER.debug("Created PreRecordMessageProtocol")
 
     def on_chunk(self, audio_bytes: bytes) -> None:
@@ -138,11 +139,6 @@ class PreRecordMessageProtocol(RtpDatagramProtocol):
         _LOGGER.debug("on_chunk")
         if self.transport is None:
             return
-
-        if self._audio_bytes is None:
-            # 16Khz, 16-bit mono audio message
-            file_path = Path(__file__).parent / self.file_name
-            self._audio_bytes = file_path.read_bytes()
 
         if self._audio_task is None:
             self._audio_task = self.loop.create_task(
