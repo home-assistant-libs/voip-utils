@@ -15,12 +15,23 @@ _LOGGER = logging.getLogger(__name__)
 
 load_dotenv()
 
+
+def get_env_int(env_var: str, default_val: int) -> int:
+    value = os.getenv(env_var)
+    if value is None:
+        return default_val
+    try:
+        return int(value)
+    except ValueError:
+        return default_val
+
+
 CALL_SRC_USER = os.getenv("CALL_SRC_USER")
 CALL_SRC_IP = os.getenv("CALL_SRC_IP", "127.0.0.1")
-CALL_SRC_PORT = int(os.getenv("CALL_SRC_PORT", 5060))
+CALL_SRC_PORT = get_env_int("CALL_SRC_PORT", 5060)
 CALL_VIA_IP = os.getenv("CALL_VIA_IP")
 CALL_DEST_IP = os.getenv("CALL_DEST_IP", "127.0.0.1")
-CALL_DEST_PORT = int(os.getenv("CALL_DEST_PORT", 5060))
+CALL_DEST_PORT = get_env_int("CALL_DEST_PORT", 5060)
 CALL_DEST_USER = os.getenv("CALL_DEST_USER")
 
 
