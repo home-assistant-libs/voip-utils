@@ -81,6 +81,7 @@ def get_rtp_info(body: str) -> RtpInfo:
     rtp_ip = None
     rtp_port = None
     opus_payload_type = None
+    opus_payload_types_detected = []
     for line in body_lines:
         line = line.strip()
         if not line:
@@ -100,8 +101,15 @@ def get_rtp_info(body: str) -> RtpInfo:
             codec_str = value.split(":", maxsplit=1)[1]
             codec_parts = codec_str.split()
             if (len(codec_parts) > 1) and (codec_parts[1].lower().startswith("opus")):
-                opus_payload_type = int(codec_parts[0])
+                opus_payload_types_detected.append(int(codec_parts[0]))
                 _LOGGER.debug("Detected OPUS payload type as %s", opus_payload_type)
+
+    if len(opus_payload_types_detected) > 0:
+        opus_payload_type = opus_payload_types_detected[0]
+        _LOGGER.debug("Using first detected payload type: %s", opus_payload_type)
+    else:
+        opus_payload_type = OPUS_PAYLOAD_TYPE
+        _LOGGER.debug("Using default payload type: %s", opus_payload_type)
 
     return RtpInfo(rtp_ip=rtp_ip, rtp_port=rtp_port, payload_type=opus_payload_type)
 
@@ -373,7 +381,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
             "s=Talk",
             f"c=IN IP4 {self._source_endpoint.host}",
             "t=0 0",
-            f"m=audio {self._rtp_port} RTP/AVP 0 96 101 103 104 123",
+            f"m=audio {self._rtp_port} RTP/AVP 123 96 101 103 104",
             "a=sendrecv",
             "a=rtpmap:96 opus/48000/2",
             "a=fmtp:96 useinbandfec=0",
