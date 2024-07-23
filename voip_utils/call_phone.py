@@ -1,15 +1,10 @@
 import asyncio
 import logging
-import os
-import socket
 from functools import partial
-from pathlib import Path
-from typing import Any, Callable, Optional, Set
-
-from dotenv import load_dotenv
+from typing import Any, Callable, Set
 
 from .sip import CallInfo, CallPhoneDatagramProtocol, SdpInfo, SipEndpoint
-from .voip import RtcpDatagramProtocol, RtcpState, RtpDatagramProtocol
+from .voip import RtcpDatagramProtocol, RtcpState
 
 _LOGGER = logging.getLogger(__name__)
 
