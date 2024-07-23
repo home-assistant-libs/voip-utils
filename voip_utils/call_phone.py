@@ -25,6 +25,7 @@ RTP_AUDIO_SETTINGS = {
 
 CallProtocolFactory = Callable[[CallInfo, RtcpState], asyncio.DatagramProtocol]
 
+
 class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
     """UDP server for Voice over IP (VoIP)."""
 

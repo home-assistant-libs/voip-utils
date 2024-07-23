@@ -8,9 +8,9 @@ from typing import Any, Callable, Optional, Set
 
 from dotenv import load_dotenv
 
+from voip_utils.call_phone import VoipCallDatagramProtocol
 from voip_utils.sip import CallInfo, CallPhoneDatagramProtocol, SdpInfo, SipEndpoint
 from voip_utils.voip import RtcpDatagramProtocol, RtcpState, RtpDatagramProtocol
-from voip_utils.call_phone import VoipCallDatagramProtocol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ RTP_AUDIO_SETTINGS = {
     "channels": CHANNELS,
     "sleep_ratio": 0.99,
 }
+
 
 class PreRecordMessageProtocol(RtpDatagramProtocol):
     """Plays a pre-recorded message on a loop."""
@@ -153,7 +154,10 @@ async def main() -> None:
             destination,
             rtp_port,
             lambda call_info, rtcp_state: PreRecordMessageProtocol(
-                "problem.pcm", call_info.opus_payload_type, loop=loop, rtcp_state=rtcp_state
+                "problem.pcm",
+                call_info.opus_payload_type,
+                loop=loop,
+                rtcp_state=rtcp_state,
             ),
         ),
         local_addr=(CALL_SRC_IP, CALL_SRC_PORT),
