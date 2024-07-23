@@ -15,5 +15,5 @@ Set environment variables for source and destination endpoints in .env file
     CALL_DEST_USER = "phone"
 
 Run script
-python -m voip_utils.call_phone
+python call_example.py
 
