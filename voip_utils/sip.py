@@ -86,12 +86,12 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
             caller_uri = None
             caller_name = None
-            # The Contact header should give us the URI used for sending SIP messages to the device
-            if headers.get("contact") is not None:
-                caller_uri, caller_name = self._parse_uri_header(headers.get("contact"))
-            # We can try using the From header as a fallback
-            elif headers.get("from") is not None:
+            # The From header should give us the URI used for sending SIP messages to the device
+            if headers.get("from") is not None:
                 caller_uri, caller_name = self._parse_uri_header(headers.get("from"))
+            # We can try using the Contact header as a fallback
+            elif headers.get("contact") is not None:
+                caller_uri, caller_name = self._parse_uri_header(headers.get("contact"))
             # If all else fails try to generate a URI based on the IP and port from the address the message came from
             else:
                 caller_uri = "sip:" + caller_ip + ":" + caller_sip_port
