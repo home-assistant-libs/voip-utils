@@ -208,10 +208,12 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
     ) -> None:
         """Send audio from WAV file in chunks over RTP."""
         if not self._is_connected:
+            _LOGGER.debug("Not connected, can't send audio")
             return
 
         addr = addr or self.addr
         if addr is None:
+            _LOGGER.debug("No destination address, can't send audio")
             raise ValueError("Destination address not set")
 
         bytes_per_sample = width * channels
@@ -222,6 +224,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         samples_left = len(audio_bytes) // bytes_per_sample
         rtp_packets: list[bytes] = []
         while samples_left > 0:
+            _LOGGER.debug("Preparing audio chunk to send")
             bytes_offset = sample_offset * bytes_per_sample
             chunk = audio_bytes[bytes_offset : bytes_offset + bytes_per_frame]
             samples_in_chunk = len(chunk) // bytes_per_sample
@@ -239,6 +242,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             sample_offset += samples_in_chunk
 
         # Pause before sending to allow time for user to pick up phone.
+        _LOGGER.debug("Pause before sending")
         time.sleep(silence_before)
 
         # Send RTP in a steady stream, delaying between each packet to simulate real-time audio
