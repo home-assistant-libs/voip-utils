@@ -65,6 +65,11 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         try:
             caller_ip, caller_sip_port = addr
             message = data.decode()
+
+            if message == '\r\n\r\n':
+                _LOGGER.debug("keepalive")
+                return
+
             method, ruri, headers, body = self._parse_sip(message)
             _LOGGER.debug(
                 "Received datagram method=%s, ruri=%s, headers=%s, body=%s",
@@ -196,7 +201,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             "a=ptime:20",
             "a=maxptime:150",
             "a=sendrecv",
-            _CRLF,
+            "",
         ]
         body = _CRLF.join(body_lines)
 
