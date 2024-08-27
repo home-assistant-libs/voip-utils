@@ -19,6 +19,7 @@ SIP_PORT = 5060
 _LOGGER = logging.getLogger(__name__)
 _CRLF = "\r\n"
 
+
 @dataclass
 class SdpInfo:
     """Information for Session Description Protocol (SDP)."""
@@ -27,6 +28,7 @@ class SdpInfo:
     id: int
     session_name: str
     version: str
+
 
 @dataclass
 class SipEndpoint:
@@ -53,17 +55,20 @@ class SipEndpoint:
                 self.description = None
             self.uri = header_match.group("uri")
             uri_pattern = re.compile(
-                r'(?P<scheme>sips?):(?:(?P<user>[^@]+)@)?(?P<host>[^:;?]+)(?::(?P<port>\d+))?'
+                r"(?P<scheme>sips?):(?:(?P<user>[^@]+)@)?(?P<host>[^:;?]+)(?::(?P<port>\d+))?"
             )
             uri_match = uri_pattern.match(self.uri)
             if uri_match is None:
                 raise ValueError("Invalid SIP uri")
-            self.scheme = uri_match.group('scheme')
-            self.username = uri_match.group('user')
-            self.host = uri_match.group('host')
-            self.port = int(uri_match.group('port')) if uri_match.group('port') else SIP_PORT
+            self.scheme = uri_match.group("scheme")
+            self.username = uri_match.group("user")
+            self.host = uri_match.group("host")
+            self.port = (
+                int(uri_match.group("port")) if uri_match.group("port") else SIP_PORT
+            )
         else:
             raise ValueError("Invalid SIP header")
+
 
 @dataclass
 class CallInfo:
@@ -89,7 +94,14 @@ class RtpInfo:
     rtp_port: int | None
     payload_type: int | None
 
-def get_sip_endpoint(host: str, port: Optional[int] = None, scheme: Optional[str] = "sip", username: Optional[str] = None, description: Optional[str] = None) -> SipEndpoint:
+
+def get_sip_endpoint(
+    host: str,
+    port: Optional[int] = None,
+    scheme: Optional[str] = "sip",
+    username: Optional[str] = None,
+    description: Optional[str] = None,
+) -> SipEndpoint:
     uri = f"{scheme}:"
     if username:
         uri += f"{username}@"
@@ -186,10 +198,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             else:
                 caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
-            _LOGGER.debug(
-                "Incoming call from endpoint=%s",
-                caller_endpoint
-            )
+            _LOGGER.debug("Incoming call from endpoint=%s", caller_endpoint)
 
             # Extract caller's RTP port from SDP.
             # See: https://datatracker.ietf.org/doc/html/rfc2327
