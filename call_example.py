@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional, Set
 from dotenv import load_dotenv
 
 from voip_utils.call_phone import VoipCallDatagramProtocol
-from voip_utils.sip import CallInfo, CallPhoneDatagramProtocol, SdpInfo, SipEndpoint
+from voip_utils.sip import CallInfo, CallPhoneDatagramProtocol, SdpInfo, SipEndpoint, get_sip_endpoint
 from voip_utils.voip import RtcpDatagramProtocol, RtcpState, RtpDatagramProtocol
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,13 +109,13 @@ async def main() -> None:
     logging.basicConfig(level=logging.DEBUG)
 
     loop = asyncio.get_event_loop()
-    source = SipEndpoint(
-        username=CALL_SRC_USER, host=CALL_SRC_IP, port=CALL_SRC_PORT, description=None
+    source = get_sip_endpoint(
+        host=CALL_SRC_IP, port=CALL_SRC_PORT, username=CALL_SRC_USER, description=None
     )
-    destination = SipEndpoint(
-        username=CALL_DEST_USER,
+    destination = get_sip_endpoint(
         host=CALL_DEST_IP,
         port=CALL_DEST_PORT,
+        username=CALL_DEST_USER,
         description=None,
     )
 
