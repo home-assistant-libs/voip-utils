@@ -190,10 +190,10 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             caller_endpoint = None
             # The From header should give us the URI used for sending SIP messages to the device
             if headers.get("from") is not None:
-                caller_endpoint = SipEndpoint(headers.get("from"))
+                caller_endpoint = SipEndpoint(headers.get("from") or "")
             # We can try using the Contact header as a fallback
             elif headers.get("contact") is not None:
-                caller_endpoint = SipEndpoint(headers.get("contact"))
+                caller_endpoint = SipEndpoint(headers.get("contact") or "")
             # If all else fails try to generate a URI based on the IP and port from the address the message came from
             else:
                 caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
