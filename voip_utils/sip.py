@@ -418,7 +418,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         invite_text = _CRLF.join(invite_lines) + _CRLF
         invite_bytes = invite_text.encode("utf-8")
 
-        print((invite_bytes + sdp_bytes).decode())
+        _LOGGER.debug(invite_bytes + sdp_bytes)
 
         self.transport.sendto(
             invite_bytes + sdp_bytes,
@@ -429,7 +429,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         try:
             response_text = data.decode("utf-8")
             response_lines = response_text.splitlines()
-            print(response_lines)
+            _LOGGER.debug(response_lines)
             is_ok = False
 
             for i, line in enumerate(response_lines):

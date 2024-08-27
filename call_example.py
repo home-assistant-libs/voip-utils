@@ -62,7 +62,6 @@ class PreRecordMessageProtocol(RtpDatagramProtocol):
         opus_payload_type: int,
         message_delay: float = 1.0,
         loop_delay: float = 2.0,
-        loop: Optional[asyncio.AbstractEventLoop] = None,
         rtcp_state: RtcpState | None = None,
     ) -> None:
         """Set up RTP server."""
@@ -73,7 +72,7 @@ class PreRecordMessageProtocol(RtpDatagramProtocol):
             opus_payload_type=opus_payload_type,
             rtcp_state=rtcp_state,
         )
-        self.loop = loop
+        self.loop = asyncio.get_running_loop()
         self.file_name = file_name
         self.message_delay = message_delay
         self.loop_delay = loop_delay
@@ -162,7 +161,6 @@ async def main() -> None:
             lambda call_info, rtcp_state: PreRecordMessageProtocol(
                 "problem.pcm",
                 call_info.opus_payload_type,
-                loop=loop,
                 rtcp_state=rtcp_state,
             ),
         ),
