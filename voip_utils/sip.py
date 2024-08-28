@@ -109,7 +109,7 @@ def get_sip_endpoint(
     if port:
         uri += f":{port}"
     if description:
-        uri = f'"{description} <{uri}>'
+        uri = f'"{description}" <{uri}>'
     return SipEndpoint(uri)
 
 
@@ -362,19 +362,17 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         source: SipEndpoint,
         dest: SipEndpoint,
         rtp_port: int,
-        loop: Optional[asyncio.AbstractEventLoop] = None,
     ) -> None:
         self.sdp_info = sdp_info
         self.transport = None
         self._closed_event = asyncio.Event()
-        self._loop = loop if loop is not None else asyncio.get_running_loop()
+        self._loop = asyncio.get_running_loop()
         self._session_id = str(time.monotonic_ns())
         self._session_version = str(time.monotonic_ns())
         self._call_id = str(time.monotonic_ns())
         self._source_endpoint = source
         self._dest_endpoint = dest
         self._rtp_port = rtp_port
-        self._request_uri = f"sip:{dest.username}@{dest.host}:{dest.port}"
 
     def connection_made(self, transport):
         self.transport = transport
@@ -401,11 +399,11 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         sdp_bytes = sdp_text.encode("utf-8")
 
         invite_lines = [
-            f"INVITE {self._request_uri} SIP/2.0",
+            f"INVITE {self._dest_endpoint.uri} SIP/2.0",
             f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
-            f"From: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-            f"Contact: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-            f"To: <sip:{self._dest_endpoint.username}@{self._dest_endpoint.host}:{self._dest_endpoint.port}>",
+            f"From: {self._source_endpoint.sip_header}",
+            f"Contact: {self._source_endpoint.sip_header}",
+            f"To: {self._dest_endpoint.sip_header}",
             f"Call-ID: {self._call_id}",
             "CSeq: 50 INVITE",
             "User-Agent: test-agent 1.0",
@@ -426,140 +424,143 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         )
 
     def datagram_received(self, data: bytes, addr):
-        try:
-            response_text = data.decode("utf-8")
-            response_lines = response_text.splitlines()
-            _LOGGER.debug(response_lines)
-            is_ok = False
+        response_text = data.decode("utf-8")
+        response_lines = response_text.splitlines()
+        _LOGGER.debug(response_lines)
+        is_ok = False
 
-            for i, line in enumerate(response_lines):
-                line = line.strip()
-                if i == 0:
-                    _version, code, response_type = line.split(maxsplit=2)
-                    _LOGGER.debug(
-                        "Version=%s, Code=%s, response_type=%s",
-                        _version,
-                        code,
-                        response_type,
-                    )
-                    if (code == "200") and (response_type == "OK"):
-                        is_ok = True
-                    elif code == "401":
-                        _LOGGER.debug(
-                            "Got 401 Unauthorized response, should attempt authentication here..."
-                        )
-                        # register_lines = [
-                        #    f"REGISTER {self._request_uri} SIP/2.0",
-                        #    f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
-                        #    f"From: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-                        #    f"Contact: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-                        #    f"To: <sip:{self._dest_endpoint.username}@{self._dest_endpoint.host}:{self._dest_endpoint.port}>",
-                        #    f"Call-ID: {self._call_id}",
-                        #    "CSeq: 51 REGISTER",
-                        #    "Authorization: ",
-                        #    "User-Agent: test-agent 1.0",
-                        #    "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
-                        #    "",
-                        # ]
-                    elif _version == "BYE":
-                        _LOGGER.debug("Received BYE message: %s", line)
-                        if self.transport is not None:
-                            # Acknowledge the BYE message, otherwise the phone will keep sending it
-                            (
-                                protocol,
-                                code,
-                                reason,
-                                headers,
-                                body,
-                            ) = self._parse_sip_reply(response_text)
-                            _LOGGER.debug(
-                                "Parsed response protocol=%s code=%s reason=%s headers=[%s] body=[%s]",
-                                protocol,
-                                code,
-                                reason,
-                                headers,
-                                body,
-                            )
-                            rtp_info = get_rtp_info(body)
-                            remote_rtp_port = rtp_info.rtp_port
-                            opus_payload_type = rtp_info.payload_type
-                            via_header = headers["via"]
-                            from_header = headers["from"]
-                            to_header = headers["to"]
-                            callid_header = headers["call-id"]
-                            cseq_header = headers["cseq"]
-                            ok_lines = [
-                                "SIP/2.0 200 OK",
-                                f"Via: {via_header}",
-                                f"From: {from_header}",
-                                f"To: {to_header}",
-                                f"Call-ID: {callid_header}",
-                                f"CSeq: {cseq_header}",
-                                "User-Agent: test-agent 1.0",
-                                "Content-Length: 0",
-                            ]
-                            ok_text = _CRLF.join(ok_lines) + _CRLF
-                            ok_bytes = ok_text.encode("utf-8")
-                            # We should probably tell the associated RTP server to shutdown at this point, assuming we aren't reusing it for other calls
-                            _LOGGER.debug("Sending OK for BYE message: %s", ok_text)
-                            self.transport.sendto(
-                                ok_bytes,
-                                (self._dest_endpoint.host, self._dest_endpoint.port),
-                            )
+        for i, line in enumerate(response_lines):
+            line = line.strip()
+            if not line:
+                break
+            if i > 0:
+                continue
+            _version, code, response_type = line.split(maxsplit=2)
+            _LOGGER.debug(
+                "Version=%s, Code=%s, response_type=%s",
+                _version,
+                code,
+                response_type,
+            )
+            if (code == "200") and (response_type == "OK"):
+                is_ok = True
+            elif code == "401":
+                _LOGGER.debug(
+                    "Got 401 Unauthorized response, should attempt authentication here..."
+                )
+                # register_lines = [
+                #    f"REGISTER {self._dest_endpoint.uri} SIP/2.0",
+                #    f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
+                #    f"From: {self._source_endpoint.sip_header}",
+                #    f"Contact: {self._source_endpoint.sip_header}",
+                #    f"To: {self._dest_endpoint.sip_header}",
+                #    f"Call-ID: {self._call_id}",
+                #    "CSeq: 51 REGISTER",
+                #    "Authorization: ",
+                #    "User-Agent: test-agent 1.0",
+                #    "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
+                #    "",
+                # ]
+            elif _version == "BYE":
+                _LOGGER.debug("Received BYE message: %s", line)
+                if self.transport is None:
+                    _LOGGER.debug("Skipping message: %s", line)
+                    continue
 
-                            self.transport.close()
-                            self.transport = None
-                        else:
-                            _LOGGER.debug("Skipping message: %s", line)
-                elif not line:
-                    break
+                # Acknowledge the BYE message, otherwise the phone will keep sending it
+                (
+                    protocol,
+                    code,
+                    reason,
+                    headers,
+                    body,
+                ) = self._parse_sip_reply(response_text)
+                _LOGGER.debug(
+                    "Parsed response protocol=%s code=%s reason=%s headers=[%s] body=[%s]",
+                    protocol,
+                    code,
+                    reason,
+                    headers,
+                    body,
+                )
+                rtp_info = get_rtp_info(body)
+                remote_rtp_port = rtp_info.rtp_port
+                opus_payload_type = rtp_info.payload_type
+                via_header = headers["via"]
+                from_header = headers["from"]
+                to_header = headers["to"]
+                callid_header = headers["call-id"]
+                cseq_header = headers["cseq"]
+                ok_lines = [
+                    "SIP/2.0 200 OK",
+                    f"Via: {via_header}",
+                    f"From: {from_header}",
+                    f"To: {to_header}",
+                    f"Call-ID: {callid_header}",
+                    f"CSeq: {cseq_header}",
+                    "User-Agent: test-agent 1.0",
+                    "Content-Length: 0",
+                ]
+                ok_text = _CRLF.join(ok_lines) + _CRLF
+                ok_bytes = ok_text.encode("utf-8")
+                # We should probably tell the associated RTP server to shutdown at this point, assuming we aren't reusing it for other calls
+                _LOGGER.debug("Sending OK for BYE message: %s", ok_text)
+                self.transport.sendto(
+                    ok_bytes,
+                    (self._dest_endpoint.host, self._dest_endpoint.port),
+                )
 
-            if is_ok:
-                _LOGGER.debug("Got OK message")
-                if self.transport is not None:
-                    protocol, code, reason, headers, body = self._parse_sip_reply(
-                        response_text
-                    )
-                    _LOGGER.debug(
-                        "Parsed response protocol=%s code=%s reason=%s headers=[%s] body=[%s]",
-                        protocol,
-                        code,
-                        reason,
-                        headers,
-                        body,
-                    )
-                    rtp_info = get_rtp_info(body)
-                    remote_rtp_port = rtp_info.rtp_port
-                    opus_payload_type = rtp_info.payload_type
-                    to_header = headers["to"]
-                    ack_lines = [
-                        f"ACK {self._request_uri} SIP/2.0",
-                        f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
-                        f"From: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-                        f"To: {to_header}",
-                        f"Call-ID: {self._call_id}",
-                        "CSeq: 50 ACK",
-                        "User-Agent: test-agent 1.0",
-                        "Content-Length: 0",
-                    ]
-                    ack_text = _CRLF.join(ack_lines) + _CRLF
-                    ack_bytes = ack_text.encode("utf-8")
-                    self.transport.sendto(
-                        ack_bytes, (self._dest_endpoint.host, self._dest_endpoint.port)
-                    )
+                self.transport.close()
+                self.transport = None
 
-                    # The call been answered, proceed with desired action here
-                    self.on_call(
-                        CallInfo(
-                            caller_endpoint=self._dest_endpoint,
-                            caller_rtp_port=remote_rtp_port,
-                            server_ip=self._dest_endpoint.host,
-                            headers=headers,
-                            opus_payload_type=opus_payload_type,  # Should probably update this to eventually support more codecs
-                        )
-                    )
-        except Exception:
-            _LOGGER.exception("Unexpected error handling SIP response")
+        if not is_ok:
+            _LOGGER.debug("Received non-OK response [%s]", response_text)
+            return
+
+        _LOGGER.debug("Got OK message")
+        if self.transport is None:
+            _LOGGER.debug("No transport for exchanging SIP message")
+            return
+
+        protocol, code, reason, headers, body = self._parse_sip_reply(response_text)
+        _LOGGER.debug(
+            "Parsed response protocol=%s code=%s reason=%s headers=[%s] body=[%s]",
+            protocol,
+            code,
+            reason,
+            headers,
+            body,
+        )
+        rtp_info = get_rtp_info(body)
+        remote_rtp_port = rtp_info.rtp_port
+        opus_payload_type = rtp_info.payload_type
+        to_header = headers["to"]
+        ack_lines = [
+            f"ACK {self._dest_endpoint.uri} SIP/2.0",
+            f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
+            f"From: {self._source_endpoint.sip_header}",
+            f"To: {to_header}",
+            f"Call-ID: {self._call_id}",
+            "CSeq: 50 ACK",
+            "User-Agent: test-agent 1.0",
+            "Content-Length: 0",
+        ]
+        ack_text = _CRLF.join(ack_lines) + _CRLF
+        ack_bytes = ack_text.encode("utf-8")
+        self.transport.sendto(
+            ack_bytes, (self._dest_endpoint.host, self._dest_endpoint.port)
+        )
+
+        # The call been answered, proceed with desired action here
+        self.on_call(
+            CallInfo(
+                caller_endpoint=self._dest_endpoint,
+                caller_rtp_port=remote_rtp_port,
+                server_ip=self._dest_endpoint.host,
+                headers=headers,
+                opus_payload_type=opus_payload_type,  # Should probably update this to eventually support more codecs
+            )
+        )
 
     @abstractmethod
     def on_call(self, call_info: CallInfo):
@@ -568,10 +569,10 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def hang_up(self):
         """Hang up the call when finished"""
         bye_lines = [
-            f"BYE {self._request_uri} SIP/2.0",
+            f"BYE {self._dest_endpoint.uri} SIP/2.0",
             f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
-            f"From: <sip:{self._source_endpoint.username}@{self._source_endpoint.host}:{self._source_endpoint.port}>",
-            f"To: <sip:{self._dest_endpoint.username}@{self._dest_endpoint.host}:{self._dest_endpoint.port}>"
+            f"From: {self._source_endpoint.sip_header}",
+            f"To: {self._dest_endpoint.sip_header}",
             f"Call-ID: {self._call_id}",
             "CSeq: 51 BYE",
             "User-Agent: test-agent 1.0",
