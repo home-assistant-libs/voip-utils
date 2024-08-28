@@ -566,6 +566,10 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def on_call(self, call_info: CallInfo):
         """Handle outgoing calls."""
 
+    @abstractmethod
+    def call_cleanup(self):
+        """Handle cleanup after ending call."""
+
     def hang_up(self):
         """Hang up the call when finished"""
         bye_lines = [
@@ -586,12 +590,16 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
             bye_bytes, (self._dest_endpoint.host, self._dest_endpoint.port)
         )
 
+        self.call_cleanup()
+
         self.transport.close()
         self.transport = None
 
     def connection_lost(self, exc):
         """Signal wait_closed when transport is completely closed."""
+        _LOGGER.debug("Connection lost")
         self._closed_event.set()
+        self.call_cleanup()
 
     async def wait_closed(self) -> None:
         """Wait for connection_lost to be called."""

@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from asyncio.transports import DatagramTransport
 from functools import partial
-from typing import Any, Callable, Set
+from typing import Any, Callable, Set, Optional
 
 from .sip import CallInfo, CallPhoneDatagramProtocol, SdpInfo, SipEndpoint
 from .voip import RtcpDatagramProtocol, RtcpState
@@ -36,9 +37,11 @@ class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
         super().__init__(sdp_info, source_endpoint, dest_endpoint, rtp_port)
         self.call_protocol_factory = call_protocol_factory
         self._tasks: Set[asyncio.Future[Any]] = set()
+        self._rtp_transport: Optional[DatagramTransport] = None
+        self._rtpc_transport: Optional[DatagramTransport] = None
 
     def on_call(self, call_info: CallInfo):
-        """Answer incoming calls and start RTP server on a random port."""
+        """Answer incoming calls and start RTP server on specified port."""
 
         rtp_ip = self._source_endpoint.host
 
@@ -60,6 +63,15 @@ class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
 
         _LOGGER.debug("RTP server started")
 
+    def call_cleanup(self):
+        _LOGGER.debug("Closing RTP/C servers for end of call")
+        if self._rtp_transport is not None:
+            self._rtp_transport.close()
+            self._rtp_transport = None
+        if self._rtpc_transport is not None:
+            self._rtpc_transport.close()
+            self._rtpc_transport = None
+
     def end_call(self, task):
         """Callback for hanging up when call is ended."""
         self.hang_up()
@@ -77,13 +89,13 @@ class VoipCallDatagramProtocol(CallPhoneDatagramProtocol):
         loop = asyncio.get_running_loop()
 
         # RTCP server
-        await loop.create_datagram_endpoint(
+        self._rtpc_transport, _ = await loop.create_datagram_endpoint(
             lambda: RtcpDatagramProtocol(rtcp_state),
             (rtp_ip, rtp_port + 1),
         )
 
         # RTP server
-        await loop.create_datagram_endpoint(
+        self._rtp_transport, _ = await loop.create_datagram_endpoint(
             partial(protocol_factory, call_info, rtcp_state),
             (rtp_ip, rtp_port),
         )
