@@ -1,6 +1,11 @@
 """Utility for converting audio to/from RTP + OPUS packets."""
 
-import audioop  # pylint: disable=deprecated-module
+try:
+    # Use built-in audioop until it's removed in Python 3.13
+    import audioop  # pylint: disable=deprecated-module
+except ImportError:
+    from . import pyaudioop as audioop  # type: ignore[no-redef]
+
 import logging
 import random
 import struct

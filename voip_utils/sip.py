@@ -85,6 +85,16 @@ class CallInfo:
         """Real-time Transport Control Protocol (RTCP) port."""
         return self.caller_rtp_port + 1
 
+    @property
+    def caller_ip(self) -> str:
+        """Get IP address of caller."""
+        return self.caller_endpoint.host
+
+    @property
+    def caller_sip_port(self) -> int:
+        """SIP port of caller."""
+        return self.caller_endpoint.port
+
 
 @dataclass
 class RtpInfo:

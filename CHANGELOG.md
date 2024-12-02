@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Use Python port of deprecated `audioop` module
+
+## 0.2.0
+
+- Add outgoing call feature
+
 ## 0.0.8
 
 - Close RTP socket to free port
