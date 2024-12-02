@@ -30,4 +30,4 @@ jobs:
         run: sudo apt-get install -y libopus0
       - run: script/setup --dev
       - run: script/lint
-      - run: pytest tests
+      - run: script/test
