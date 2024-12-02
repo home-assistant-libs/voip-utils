@@ -28,6 +28,6 @@ jobs:
           cache: "pip"
       - name: Install opuslib
         run: sudo apt-get install -y libopus0
-      - run: script/setup
+      - run: script/setup --dev
       - run: script/lint
       - run: pytest tests
