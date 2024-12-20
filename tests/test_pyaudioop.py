@@ -1,15 +1,14 @@
-import sys
-
 from voip_utils import pyaudioop
 
+byteorder = "little"
 
 def pack(width, data):
-    return b"".join(v.to_bytes(width, sys.byteorder, signed=True) for v in data)
+    return b"".join(v.to_bytes(width, byteorder, signed=True) for v in data)
 
 
 def unpack(width, data):
     return [
-        int.from_bytes(data[i : i + width], sys.byteorder, signed=True)
+        int.from_bytes(data[i : i + width], byteorder, signed=True)
         for i in range(0, len(data), width)
     ]
 
