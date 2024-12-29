@@ -122,6 +122,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         )
 
         # RTP server
+        _LOGGER.debug("Creating RTP server on port %s", rtp_port)
         await loop.create_datagram_endpoint(
             partial(protocol_factory, call_info, rtcp_state),
             (rtp_ip, rtp_port),
@@ -140,6 +141,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         rtcp_state: Optional[RtcpState] = None,
     ) -> None:
         """Set up RTP server."""
+        _LOGGER.debug("Creating new RTP server")
         self.rtcp_state = rtcp_state
 
         if self.rtcp_state is not None:
@@ -161,6 +163,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
     def disconnect(self):
         self._is_connected = False
+        self.addr = None
         if self.transport is not None:
             self.transport.close()
             self.transport = None
@@ -175,6 +178,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if not self._is_connected:
             return
 
+        _LOGGER.debug("Datagram received on addr %s, current addr is %s", addr, self.addr)
         if self.addr is None:
             self.addr = addr
 
