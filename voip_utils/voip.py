@@ -175,8 +175,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if not self._is_connected:
             return
 
-        if self.addr is None:
-            self.addr = addr
+        self.addr = addr
 
         try:
             # STT expects 16Khz mono with 16-bit samples
