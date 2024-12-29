@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Always set `addr`
+
 ## 0.2.1
 
 - Use Python port of deprecated `audioop` module
