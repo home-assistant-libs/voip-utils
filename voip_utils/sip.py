@@ -79,8 +79,8 @@ class CallInfo:
     server_ip: str
     headers: dict[str, str]
     opus_payload_type: int = OPUS_PAYLOAD_TYPE
-    local_rtp_ip: str = None
-    local_rtp_port: int = None
+    local_rtp_ip: str | None = None
+    local_rtp_port: int | None = None
 
     @property
     def caller_rtcp_port(self) -> int:
@@ -175,16 +175,18 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Set up SIP server."""
         self.sdp_info = sdp_info
         self.transport = None
-        self._outgoing_calls: dict[str,int] = {}
+        self._outgoing_calls: dict[str, int] = {}
 
-    def outgoing_call(self, source: SipEndpoint, destination: SipEndpoint, rtp_port: int):
+    def outgoing_call(
+        self, source: SipEndpoint, destination: SipEndpoint, rtp_port: int
+    ):
         """Make an outgoing call from the given source endpoint to the destination endpoint, using the rtp_port for the local RTP port of the call."""
         session_id = str(time.monotonic_ns())
         session_version = session_id
         call_id = session_id
         self._register_outgoing_call(call_id, rtp_port)
         if self.transport is None:
-            _LOGGER.warn("No transport for outgoing VOIP calls")
+            _LOGGER.warning("No transport for outgoing VOIP calls")
             return
 
         sdp_lines = [
@@ -234,7 +236,6 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             msg_bytes,
             (destination.host, destination.port),
         )
-
 
     def _register_outgoing_call(self, call_id: str, rtp_port: int):
         """Register the RTP port associated with an outgoing call."""
@@ -310,7 +311,8 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                             ):
                                 opus_payload_type = int(codec_parts[0])
                                 _LOGGER.debug(
-                                    "Detected OPUS payload type as %s", opus_payload_type
+                                    "Detected OPUS payload type as %s",
+                                    opus_payload_type,
                                 )
 
                 if caller_rtp_port is None:
@@ -369,18 +371,23 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 opus_payload_type = rtp_info.payload_type
                 to_header = headers["to"]
                 caller_endpoint = None
-                # The From header should give us the URI used for sending SIP messages to the device
                 if headers.get("to") is not None:
                     caller_endpoint = SipEndpoint(headers.get("to", ""))
                 else:
                     caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
+                # The From header should give us the URI used for sending SIP messages to the device
+                local_endpoint = None
+                if headers.get("from") is not None:
+                    local_endpoint = SipEndpoint(headers.get("from", ""))
+                else:
+                    local_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
                 _LOGGER.debug("Outgoing call to endpoint=%s", caller_endpoint)
                 call_id = headers["call-id"]
                 ack_lines = [
                     f"ACK {caller_endpoint.uri} SIP/2.0",
-                    f"Via: SIP/2.0/UDP {self.local_endpoint.host}:{self.local_endpoint.port}",
-                    f"From: {self.local_endpoint.sip_header}",
+                    f"Via: SIP/2.0/UDP {local_endpoint.host}:{local_endpoint.port}",
+                    f"From: {local_endpoint.sip_header}",
                     f"To: {to_header}",
                     f"Call-ID: {call_id}",
                     "CSeq: 50 ACK",
@@ -389,9 +396,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 ]
                 ack_text = _CRLF.join(ack_lines) + _CRLF
                 ack_bytes = ack_text.encode("utf-8")
-                self.transport.sendto(
-                    ack_bytes, (caller_ip, caller_sip_port)
-                )
+                self.transport.sendto(ack_bytes, (caller_ip, caller_sip_port))
 
                 # The call been answered, proceed with desired action here
                 local_rtp_port = self._get_call_rtp_port(call_id)
@@ -402,8 +407,8 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         server_ip=remote_rtp_ip,
                         headers=headers,
                         opus_payload_type=opus_payload_type,  # Should probably update this to eventually support more codecs
-                        local_rtp_ip=self.local_endpoint.host,
-                        local_rtp_port=local_rtp_port
+                        local_rtp_ip=local_endpoint.host,
+                        local_rtp_port=local_rtp_port,
                     )
                 )
             elif method == "bye":
@@ -554,7 +559,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         body = message[offset:]
 
         return method, ruri, headers, body
-    
+
     def _parse_sip_reply(
         self, message: str
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, str], str]:

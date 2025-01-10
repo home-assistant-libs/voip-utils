@@ -58,7 +58,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             return
 
         rtp_ip = ""
-        if (call_info.local_rtp_port is None):
+        if call_info.local_rtp_port is None:
             # Find free RTP/RTCP ports
             rtp_port = 0
 
@@ -88,7 +88,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
                     pass
 
         else:
-            rtp_ip = call_info.local_rtp_ip
+            rtp_ip = call_info.local_rtp_ip if call_info.local_rtp_ip else ""
             rtp_port = call_info.local_rtp_port
 
         _LOGGER.debug(
