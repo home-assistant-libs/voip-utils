@@ -19,6 +19,8 @@ SIP_PORT = 5060
 _LOGGER = logging.getLogger(__name__)
 _CRLF = "\r\n"
 
+VOIP_UTILS_AGENT = "voip-utils"
+
 
 @dataclass
 class SdpInfo:
@@ -68,6 +70,55 @@ class SipEndpoint:
             )
         else:
             raise ValueError("Invalid SIP header")
+
+
+@dataclass
+class SipMessage:
+    """Data parsed from a SIP message."""
+
+    protocol: str
+    method: Optional[str]
+    request_uri: Optional[str]
+    code: Optional[str]
+    reason: Optional[str]
+    headers: dict[str, str]
+    body: str
+
+    @staticmethod
+    def parse_sip(message: str) -> SipMessage:
+        """Parse a SIP message into a SipMessage object."""
+        lines = message.splitlines()
+
+        method: Optional[str] = None
+        request_uri: Optional[str] = None
+        code: Optional[str] = None
+        reason: Optional[str] = None
+        headers: dict[str, str] = {}
+        offset: int = 0
+
+        # See: https://datatracker.ietf.org/doc/html/rfc3261
+        for i, line in enumerate(lines):
+            if line:
+                offset += len(line) + len(_CRLF)
+
+            if i == 0:
+                line_parts = line.split()
+                if line_parts[0].startswith("SIP"):
+                    protocol = line_parts[0]
+                    code = line_parts[1]
+                    reason = line_parts[2]
+                else:
+                    method = line_parts[0]
+                    request_uri = line_parts[1]
+                    protocol = line_parts[2]
+            elif not line:
+                break
+            else:
+                key, value = line.split(":", maxsplit=1)
+                headers[key.lower()] = value.strip()
+
+        body = message[offset:]
+        return SipMessage(protocol, method, request_uri, code, reason, headers, body)
 
 
 @dataclass
@@ -181,13 +232,14 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self, source: SipEndpoint, destination: SipEndpoint, rtp_port: int
     ):
         """Make an outgoing call from the given source endpoint to the destination endpoint, using the rtp_port for the local RTP port of the call."""
+        if self.transport is None:
+            _LOGGER.warning("No transport for outgoing VOIP calls")
+            raise RuntimeError("No transport available for outgoing call.")
+
         session_id = str(time.monotonic_ns())
         session_version = session_id
         call_id = session_id
         self._register_outgoing_call(call_id, rtp_port)
-        if self.transport is None:
-            _LOGGER.warning("No transport for outgoing VOIP calls")
-            return
 
         sdp_lines = [
             "v=0",
@@ -218,7 +270,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"To: {destination.sip_header}",
             f"Call-ID: {call_id}",
             "CSeq: 50 INVITE",
-            "User-Agent: test-agent 1.0",
+            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
             "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
             "Accept: application/sdp, application/dtmf-relay",
             "Content-Type: application/sdp",
@@ -241,7 +293,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Register the RTP port associated with an outgoing call."""
         self._outgoing_calls[call_id] = rtp_port
 
-    def _get_call_rtp_port(self, call_id: str):
+    def _get_call_rtp_port(self, call_id: str) -> int | None:
         """Get the RTP port associated with an outgoing call."""
         return self._outgoing_calls.get(call_id)
 
@@ -258,31 +310,34 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         try:
             caller_ip, caller_sip_port = addr
             message = data.decode("utf-8")
-            method, ruri, headers, body = self._parse_sip(message)
+            smsg = SipMessage.parse_sip(message)
             _LOGGER.debug(
-                "Received datagram method=%s, ruri=%s, headers=%s, body=%s",
-                method,
-                ruri,
-                headers,
-                body,
+                "Received datagram protocol=[%s], method=[%s], ruri=[%s], code=[%s], reason=[%s], headers=[%s], body=[%s]",
+                smsg.protocol,
+                smsg.method,
+                smsg.request_uri,
+                smsg.code,
+                smsg.reason,
+                smsg.headers,
+                smsg.body,
             )
-
-            if method:
+            method = smsg.method
+            if method is not None:
                 method = method.lower()
 
             if method == "invite":
                 # An invite message means someone called HA
                 _LOGGER.debug("Received invite message")
-                if not ruri:
+                if not smsg.request_uri:
                     raise ValueError("Empty receiver URI")
 
                 caller_endpoint = None
                 # The From header should give us the URI used for sending SIP messages to the device
-                if headers.get("from") is not None:
-                    caller_endpoint = SipEndpoint(headers.get("from", ""))
+                if smsg.headers.get("from") is not None:
+                    caller_endpoint = SipEndpoint(smsg.headers.get("from", ""))
                 # We can try using the Contact header as a fallback
-                elif headers.get("contact") is not None:
-                    caller_endpoint = SipEndpoint(headers.get("contact", ""))
+                elif smsg.headers.get("contact") is not None:
+                    caller_endpoint = SipEndpoint(smsg.headers.get("contact", ""))
                 # If all else fails try to generate a URI based on the IP and port from the address the message came from
                 else:
                     caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
@@ -293,7 +348,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 # See: https://datatracker.ietf.org/doc/html/rfc2327
                 caller_rtp_port: Optional[int] = None
                 opus_payload_type = OPUS_PAYLOAD_TYPE
-                body_lines = body.splitlines()
+                body_lines = smsg.body.splitlines()
                 for line in body_lines:
                     line = line.strip()
                     if line:
@@ -332,66 +387,61 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     + r"(?:\;(?P<params>[^\?]*))?"  # parameters
                     + r"(?:\?(?P<headers>.*))?"  # headers
                 )
-                re_uri = re_splituri.search(ruri)
+                re_uri = re_splituri.search(smsg.request_uri)
                 if re_uri is None:
                     raise ValueError("Receiver URI did not match expected pattern")
 
                 server_ip = re_uri.group("host")
                 if not is_ipv4_address(server_ip):
-                    raise VoipError(f"Invalid IPv4 address in {ruri}")
+                    raise VoipError(f"Invalid IPv4 address in {smsg.request_uri}")
 
                 self.on_call(
                     CallInfo(
                         caller_endpoint=caller_endpoint,
                         caller_rtp_port=caller_rtp_port,
                         server_ip=server_ip,
-                        headers=headers,
+                        headers=smsg.headers,
                         opus_payload_type=opus_payload_type,
                     )
                 )
-            elif method == "sip/2.0":
+            elif method is None:
                 # Reply message means we must have received a response to someone we called
                 # TODO: Verify that the call / sequence IDs match our outgoing INVITE
-                _LOGGER.debug("Received INVITE response [%s]", message)
-                is_ok = False
-                protocol, code, reason, headers, body = self._parse_sip_reply(message)
-                if (code == "200") and (reason == "OK"):
-                    is_ok = True
+                _LOGGER.debug("Received response [%s]", message)
+                is_ok = smsg.code == "200" and smsg.reason == "OK"
                 if not is_ok:
                     _LOGGER.debug("Received non-OK response [%s]", message)
                     return
 
                 _LOGGER.debug("Got OK message")
                 if self.transport is None:
-                    _LOGGER.debug("No transport for exchanging SIP message")
+                    _LOGGER.warning("No transport for exchanging SIP message")
                     return
-                rtp_info = get_rtp_info(body)
+                rtp_info = get_rtp_info(smsg.body)
                 remote_rtp_ip = rtp_info.rtp_ip
                 remote_rtp_port = rtp_info.rtp_port
                 opus_payload_type = rtp_info.payload_type
-                to_header = headers["to"]
                 caller_endpoint = None
-                if headers.get("to") is not None:
-                    caller_endpoint = SipEndpoint(headers.get("to", ""))
+                if smsg.headers.get("to") is not None:
+                    caller_endpoint = SipEndpoint(smsg.headers.get("to", ""))
                 else:
                     caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
                 # The From header should give us the URI used for sending SIP messages to the device
                 local_endpoint = None
-                if headers.get("from") is not None:
-                    local_endpoint = SipEndpoint(headers.get("from", ""))
+                if smsg.headers.get("from") is not None:
+                    local_endpoint = SipEndpoint(smsg.headers.get("from", ""))
                 else:
                     local_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
                 _LOGGER.debug("Outgoing call to endpoint=%s", caller_endpoint)
-                call_id = headers["call-id"]
                 ack_lines = [
                     f"ACK {caller_endpoint.uri} SIP/2.0",
                     f"Via: SIP/2.0/UDP {local_endpoint.host}:{local_endpoint.port}",
                     f"From: {local_endpoint.sip_header}",
-                    f"To: {to_header}",
-                    f"Call-ID: {call_id}",
+                    f"To: {smsg.headers['to']}",
+                    f"Call-ID: {smsg.headers['call-id']}",
                     "CSeq: 50 ACK",
-                    "User-Agent: test-agent 1.0",
+                    f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
                     "Content-Length: 0",
                 ]
                 ack_text = _CRLF.join(ack_lines) + _CRLF
@@ -399,13 +449,13 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 self.transport.sendto(ack_bytes, (caller_ip, caller_sip_port))
 
                 # The call been answered, proceed with desired action here
-                local_rtp_port = self._get_call_rtp_port(call_id)
+                local_rtp_port = self._get_call_rtp_port(smsg.headers["call-id"])
                 self.on_call(
                     CallInfo(
                         caller_endpoint=caller_endpoint,
                         caller_rtp_port=remote_rtp_port,
                         server_ip=remote_rtp_ip,
-                        headers=headers,
+                        headers=smsg.headers,
                         opus_payload_type=opus_payload_type,  # Should probably update this to eventually support more codecs
                         local_rtp_ip=local_endpoint.host,
                         local_rtp_port=local_rtp_port,
@@ -419,39 +469,19 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     return
 
                 # Acknowledge the BYE message, otherwise the phone will keep sending it
-                (
-                    protocol,
-                    code,
-                    reason,
-                    headers,
-                    body,
-                ) = self._parse_sip_reply(message)
-                _LOGGER.debug(
-                    "Parsed response protocol=%s code=%s reason=%s headers=[%s] body=[%s]",
-                    protocol,
-                    code,
-                    reason,
-                    headers,
-                    body,
-                )
-                rtp_info = get_rtp_info(body)
+                rtp_info = get_rtp_info(smsg.body)
                 remote_rtp_port = rtp_info.rtp_port
                 opus_payload_type = rtp_info.payload_type
-                via_header = headers["via"]
-                from_header = headers["from"]
-                to_header = headers["to"]
-                callid_header = headers["call-id"]
-                cseq_header = headers["cseq"]
                 # We should remove the call from the outgoing calls dict now if it is there
-                self._end_outgoing_call(callid_header)
+                self._end_outgoing_call(smsg.headers["call-id"])
                 ok_lines = [
                     "SIP/2.0 200 OK",
-                    f"Via: {via_header}",
-                    f"From: {from_header}",
-                    f"To: {to_header}",
-                    f"Call-ID: {callid_header}",
-                    f"CSeq: {cseq_header}",
-                    "User-Agent: test-agent 1.0",
+                    f"Via: {smsg.headers['via']}",
+                    f"From: {smsg.headers['from']}",
+                    f"To: {smsg.headers['to']}",
+                    f"Call-ID: {smsg.headers['call-id']}",
+                    f"CSeq: {smsg.headers['cseq']}",
+                    f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
                     "Content-Length: 0",
                 ]
                 ok_text = _CRLF.join(ok_lines) + _CRLF
@@ -530,68 +560,6 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             server_rtp_port,
         )
 
-    def _parse_sip(
-        self, message: str
-    ) -> Tuple[Optional[str], Optional[str], Dict[str, str], str]:
-        """Parse SIP message and return method, headers, and body."""
-        lines = message.splitlines()
-
-        method: Optional[str] = None
-        ruri: Optional[str] = None
-        headers: dict[str, str] = {}
-        offset: int = 0
-
-        # See: https://datatracker.ietf.org/doc/html/rfc3261
-        for i, line in enumerate(lines):
-            if line:
-                offset += len(line) + len(_CRLF)
-
-            if i == 0:
-                line_parts = line.split()
-                method = line_parts[0]
-                ruri = line_parts[1]
-            elif not line:
-                break
-            else:
-                key, value = line.split(":", maxsplit=1)
-                headers[key.lower()] = value.strip()
-
-        body = message[offset:]
-
-        return method, ruri, headers, body
-
-    def _parse_sip_reply(
-        self, message: str
-    ) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, str], str]:
-        """Parse SIP message and return method, headers, and body."""
-        lines = message.splitlines()
-
-        protocol: Optional[str] = None
-        code: Optional[str] = None
-        reason: Optional[str] = None
-        headers: dict[str, str] = {}
-        offset: int = 0
-
-        # See: https://datatracker.ietf.org/doc/html/rfc3261
-        for i, line in enumerate(lines):
-            if line:
-                offset += len(line) + len(_CRLF)
-
-            if i == 0:
-                line_parts = line.split()
-                protocol = line_parts[0]
-                code = line_parts[1]
-                reason = line_parts[2]
-            elif not line:
-                break
-            else:
-                key, value = line.split(":", maxsplit=1)
-                headers[key.lower()] = value.strip()
-
-        body = message[offset:]
-
-        return protocol, code, reason, headers, body
-
 
 class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def __init__(
@@ -644,7 +612,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"To: {self._dest_endpoint.sip_header}",
             f"Call-ID: {self._call_id}",
             "CSeq: 50 INVITE",
-            "User-Agent: test-agent 1.0",
+            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
             "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
             "Accept: application/sdp, application/dtmf-relay",
             "Content-Type: application/sdp",
@@ -686,19 +654,6 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 _LOGGER.debug(
                     "Got 401 Unauthorized response, should attempt authentication here..."
                 )
-                # register_lines = [
-                #    f"REGISTER {self._dest_endpoint.uri} SIP/2.0",
-                #    f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
-                #    f"From: {self._source_endpoint.sip_header}",
-                #    f"Contact: {self._source_endpoint.sip_header}",
-                #    f"To: {self._dest_endpoint.sip_header}",
-                #    f"Call-ID: {self._call_id}",
-                #    "CSeq: 51 REGISTER",
-                #    "Authorization: ",
-                #    "User-Agent: test-agent 1.0",
-                #    "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
-                #    "",
-                # ]
             elif _version == "BYE":
                 _LOGGER.debug("Received BYE message: %s", line)
                 if self.transport is None:
@@ -724,19 +679,14 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 rtp_info = get_rtp_info(body)
                 remote_rtp_port = rtp_info.rtp_port
                 opus_payload_type = rtp_info.payload_type
-                via_header = headers["via"]
-                from_header = headers["from"]
-                to_header = headers["to"]
-                callid_header = headers["call-id"]
-                cseq_header = headers["cseq"]
                 ok_lines = [
                     "SIP/2.0 200 OK",
-                    f"Via: {via_header}",
-                    f"From: {from_header}",
-                    f"To: {to_header}",
-                    f"Call-ID: {callid_header}",
-                    f"CSeq: {cseq_header}",
-                    "User-Agent: test-agent 1.0",
+                    f"Via: {headers['via']}",
+                    f"From: {headers['from']}",
+                    f"To: {headers['to']}",
+                    f"Call-ID: {headers['call-id']}",
+                    f"CSeq: {headers['cseq']}",
+                    f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
                     "Content-Length: 0",
                 ]
                 ok_text = _CRLF.join(ok_lines) + _CRLF
@@ -772,15 +722,14 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
         rtp_info = get_rtp_info(body)
         remote_rtp_port = rtp_info.rtp_port
         opus_payload_type = rtp_info.payload_type
-        to_header = headers["to"]
         ack_lines = [
             f"ACK {self._dest_endpoint.uri} SIP/2.0",
             f"Via: SIP/2.0/UDP {self._source_endpoint.host}:{self._source_endpoint.port}",
             f"From: {self._source_endpoint.sip_header}",
-            f"To: {to_header}",
+            f"To: {headers['to']}",
             f"Call-ID: {self._call_id}",
             "CSeq: 50 ACK",
-            "User-Agent: test-agent 1.0",
+            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
             "Content-Length: 0",
         ]
         ack_text = _CRLF.join(ack_lines) + _CRLF
@@ -817,7 +766,7 @@ class CallPhoneDatagramProtocol(asyncio.DatagramProtocol, ABC):
             f"To: {self._dest_endpoint.sip_header}",
             f"Call-ID: {self._call_id}",
             "CSeq: 51 BYE",
-            "User-Agent: test-agent 1.0",
+            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
             "Content-Length: 0",
             "",
         ]
