@@ -468,6 +468,15 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     _LOGGER.debug("Skipping message: %s", message)
                     return
 
+                # The From header should give us the URI used for sending SIP messages to the device
+                if smsg.headers.get("from") is not None:
+                    caller_endpoint = SipEndpoint(smsg.headers.get("from", ""))
+                # We can try using the Contact header as a fallback
+                elif smsg.headers.get("contact") is not None:
+                    caller_endpoint = SipEndpoint(smsg.headers.get("contact", ""))
+                # If all else fails try to generate a URI based on the IP and port from the address the message came from
+                else:
+                    caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
                 # Acknowledge the BYE message, otherwise the phone will keep sending it
                 rtp_info = get_rtp_info(smsg.body)
                 remote_rtp_port = rtp_info.rtp_port
@@ -495,12 +504,26 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 # The transport might be used for incoming calls
                 # as well, so we should leave it open.
 
+                # Cleanup any necessary call state
+                self.on_hangup(
+                    CallInfo(
+                        caller_endpoint=caller_endpoint,
+                        caller_rtp_port=remote_rtp_port,
+                        server_ip=remote_rtp_ip,
+                        headers=smsg.headers,
+                    )
+                )
+
         except Exception:
             _LOGGER.exception("Unexpected error handling SIP message")
 
     @abstractmethod
     def on_call(self, call_info: CallInfo):
         """Handle incoming calls."""
+
+    @abstractmethod
+    def on_hangup(self, call_info: CallInfo):
+        """Handle the end of a call."""
 
     def answer(
         self,
