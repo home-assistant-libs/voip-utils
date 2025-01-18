@@ -479,6 +479,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
                 # Acknowledge the BYE message, otherwise the phone will keep sending it
                 rtp_info = get_rtp_info(smsg.body)
+                remote_rtp_ip = rtp_info.rtp_ip
                 remote_rtp_port = rtp_info.rtp_port
                 opus_payload_type = rtp_info.payload_type
                 # We should remove the call from the outgoing calls dict now if it is there
