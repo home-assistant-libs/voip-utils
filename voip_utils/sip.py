@@ -44,7 +44,7 @@ class SipEndpoint:
 
     def __post_init__(self):
         header_pattern = re.compile(
-            r'\s*((?P<description>\b\w+\b|"[^"]+")\s+)?<?(?P<uri>sips?:[^>]+)>?.*'
+            r'\s*((?P<description>\b\w+\b|"[^"]+")\s*)?<?(?P<uri>sips?:[^>]+)>?.*'
         )
         header_match = header_pattern.match(self.sip_header)
         if header_match is not None:

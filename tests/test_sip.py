@@ -30,6 +30,18 @@ def test_parse_header_for_uri_no_space_name():
     assert endpoint.uri == "sip:12345@example.com"
 
 
+def test_parse_header_for_uri_no_space_between_name():
+    endpoint = SipEndpoint("Test<sip:12345@example.com>")
+    assert endpoint.description == "Test"
+    assert endpoint.uri == "sip:12345@example.com"
+
+
+def test_parse_header_for_uri_no_space_between_quoted_name():
+    endpoint = SipEndpoint('"Test Endpoint"<sip:12345@example.com>')
+    assert endpoint.description == "Test Endpoint"
+    assert endpoint.uri == "sip:12345@example.com"
+
+
 def test_parse_header_for_uri_no_username():
     endpoint = SipEndpoint("Test <sip:example.com>")
     assert endpoint.description == "Test"
