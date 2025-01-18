@@ -8,10 +8,9 @@ from typing import Any, Callable, Optional, Set
 
 from dotenv import load_dotenv
 
-from voip_utils.call_phone import VoipCallDatagramProtocol
+from voip_utils.voip import VoipDatagramProtocol, CallProtocolFactory
 from voip_utils.sip import (
     CallInfo,
-    CallPhoneDatagramProtocol,
     SdpInfo,
     SipEndpoint,
     get_sip_endpoint,
@@ -52,6 +51,22 @@ RTP_AUDIO_SETTINGS = {
     "sleep_ratio": 0.99,
 }
 
+class ExampleVoipDatagramProtocol(VoipDatagramProtocol):
+
+    def __init__(
+        self,
+        sdp_info: SdpInfo,
+        valid_protocol_factory: CallProtocolFactory,
+        invalid_protocol_factory: Optional[CallProtocolFactory] = None,
+    ) -> None:
+        """Set up VoIP call handler."""
+        super().__init__(sdp_info, valid_protocol_factory, invalid_protocol_factory)
+        self.call_end = asyncio.Event()
+
+
+    def on_hangup(self, call_info: CallInfo):
+        """Example implementation of on hangup. """
+        self.call_end.set()
 
 class PreRecordMessageProtocol(RtpDatagramProtocol):
     """Plays a pre-recorded message on a loop."""
@@ -153,11 +168,13 @@ async def main() -> None:
             pass
 
     _, protocol = await loop.create_datagram_endpoint(
-        lambda: VoipCallDatagramProtocol(
+        lambda: ExampleVoipDatagramProtocol(
             None,
-            source,
-            destination,
-            rtp_port,
+            lambda call_info, rtcp_state: PreRecordMessageProtocol(
+                "problem.pcm",
+                call_info.opus_payload_type,
+                rtcp_state=rtcp_state,
+            ),
             lambda call_info, rtcp_state: PreRecordMessageProtocol(
                 "problem.pcm",
                 call_info.opus_payload_type,
@@ -167,7 +184,9 @@ async def main() -> None:
         local_addr=(CALL_SRC_IP, CALL_SRC_PORT),
     )
 
-    await protocol.wait_closed()
+    protocol.outgoing_call(source, destination, rtp_port)
+
+    await protocol.call_end.wait()
 
 
 if __name__ == "__main__":
