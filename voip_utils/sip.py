@@ -233,7 +233,6 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     ):
         """Make an outgoing call from the given source endpoint to the destination endpoint, using the rtp_port for the local RTP port of the call."""
         if self.transport is None:
-            _LOGGER.warning("No transport for outgoing VOIP calls")
             raise RuntimeError("No transport available for outgoing call.")
 
         session_id = str(time.monotonic_ns())
