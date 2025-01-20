@@ -452,6 +452,12 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     return
 
                 _LOGGER.debug("Got OK message")
+                if not self._is_response_type(smsg, "invite"):
+                    # This will happen if/when we hang up.
+                    _LOGGER.debug("Got response for non-invite message")
+                    return
+
+                _LOGGER.debug("Got invite response")
                 rtp_info = get_rtp_info(smsg.body)
                 remote_rtp_ip = rtp_info.rtp_ip
                 remote_rtp_port = rtp_info.rtp_port
@@ -572,6 +578,14 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     @abstractmethod
     def on_hangup(self, call_info: CallInfo):
         """Handle the end of a call."""
+
+    def _is_response_type(self, msg: SipMessage, resp_type: str) -> bool:
+        """Return whether or not the response message is for the given type."""
+        return (
+            msg is not None
+            and "cseq" in msg.headers
+            and resp_type.lower() in msg.headers["cseq"].lower()
+        )
 
     def answer(
         self,
