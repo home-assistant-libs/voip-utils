@@ -575,7 +575,6 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     def on_call(self, call_info: CallInfo):
         """Handle incoming calls."""
 
-    @abstractmethod
     def on_hangup(self, call_info: CallInfo):
         """Handle the end of a call."""
 
