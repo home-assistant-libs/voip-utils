@@ -57,34 +57,39 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             _LOGGER.debug("Call rejected: %s", call_info)
             return
 
-        # Find free RTP/RTCP ports
         rtp_ip = ""
-        rtp_port = 0
+        if call_info.local_rtp_port is None:
+            # Find free RTP/RTCP ports
+            rtp_port = 0
 
-        while True:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setblocking(False)
+            while True:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setblocking(False)
 
-            # Bind to a random UDP port
-            sock.bind(("", 0))
-            rtp_ip, rtp_port = sock.getsockname()
+                # Bind to a random UDP port
+                sock.bind(("", 0))
+                rtp_ip, rtp_port = sock.getsockname()
 
-            # Close socket to free port for re-use
-            sock.close()
-
-            # Check that the next port up is available for RTCP
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                sock.bind(("", rtp_port + 1))
-
-                # Will be opened again below
+                # Close socket to free port for re-use
                 sock.close()
 
-                # Found our ports
-                break
-            except OSError:
-                # RTCP port is taken
-                pass
+                # Check that the next port up is available for RTCP
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    sock.bind(("", rtp_port + 1))
+
+                    # Will be opened again below
+                    sock.close()
+
+                    # Found our ports
+                    break
+                except OSError:
+                    # RTCP port is taken
+                    pass
+
+        else:
+            rtp_ip = call_info.local_rtp_ip if call_info.local_rtp_ip else ""
+            rtp_port = call_info.local_rtp_port
 
         _LOGGER.debug(
             "Starting RTP server on ip=%s, rtp_port=%s, rtcp_port=%s",
