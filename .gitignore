@@ -19,3 +19,4 @@ venv/
 !.vscode/tasks.json
 
 dist/
+build/
