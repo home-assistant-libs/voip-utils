@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Add support for outgoing calls (@jaminh)
+
 ## 0.2.2
 
 - Always set `addr`
