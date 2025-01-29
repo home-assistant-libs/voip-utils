@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Add cancel_call to stop ringing
+
 ## 0.3.0
 
 - Add support for outgoing calls (@jaminh)

@@ -231,7 +231,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
     def outgoing_call(
         self, source: SipEndpoint, destination: SipEndpoint, rtp_port: int
-    ):
+    ) -> CallInfo:
         """Make an outgoing call from the given source endpoint to the destination endpoint, using the rtp_port for the local RTP port of the call."""
         if self.transport is None:
             raise RuntimeError("No transport available for outgoing call.")
@@ -289,6 +289,14 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             (destination.host, destination.port),
         )
 
+        return CallInfo(
+            caller_endpoint=destination,
+            local_endpoint=source,
+            caller_rtp_port=rtp_port,
+            server_ip=source.host,
+            headers={"call-id": call_id},
+        )
+
     def hang_up(self, call_info: CallInfo):
         """Hang up the call when finished"""
         if self.transport is None:
@@ -310,6 +318,33 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         bye_bytes = bye_text.encode("utf-8")
         self.transport.sendto(
             bye_bytes, (call_info.caller_endpoint.host, call_info.caller_endpoint.port)
+        )
+
+        self._end_outgoing_call(call_info.headers["call-id"])
+        self.on_hangup(call_info)
+
+    def cancel_call(self, call_info: CallInfo):
+        """Cancel an outgoing call while it's still ringing."""
+        if self.transport is None:
+            raise RuntimeError("No transport available for sending cancel.")
+
+        cancel_lines = [
+            f"CANCEL {call_info.caller_endpoint.uri} SIP/2.0",
+            f"Via: SIP/2.0/UDP {call_info.local_endpoint.host}:{call_info.local_endpoint.port}",
+            f"From: {call_info.local_endpoint.sip_header}",
+            f"To: {call_info.caller_endpoint.sip_header}",
+            f"Call-ID: {call_info.headers['call-id']}",
+            "CSeq: 51 CANCEL",
+            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
+            "Content-Length: 0",
+            "",
+        ]
+        _LOGGER.debug("Canceling call...")
+        cancel_text = _CRLF.join(cancel_lines) + _CRLF
+        cancel_bytes = cancel_text.encode("utf-8")
+        self.transport.sendto(
+            cancel_bytes,
+            (call_info.caller_endpoint.host, call_info.caller_endpoint.port),
         )
 
         self._end_outgoing_call(call_info.headers["call-id"])
