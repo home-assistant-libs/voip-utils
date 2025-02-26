@@ -309,7 +309,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if self.transport is None:
             raise RuntimeError("No transport available for sending hangup.")
 
-        call_id = get_header(call_info.headers, 'call-id')[1]
+        call_id = get_header(call_info.headers, "call-id")[1]
         bye_lines = [
             f"BYE {call_info.caller_endpoint.uri} SIP/2.0",
             f"Via: SIP/2.0/UDP {call_info.local_endpoint.host}:{call_info.local_endpoint.port}",
