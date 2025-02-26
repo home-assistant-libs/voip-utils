@@ -85,7 +85,7 @@ class SipMessage:
     body: str
 
     @staticmethod
-    def parse_sip(message: str) -> SipMessage:
+    def parse_sip(message: str, header_lowercase: bool = True) -> SipMessage:
         """Parse a SIP message into a SipMessage object."""
         lines = message.splitlines()
 
@@ -115,7 +115,7 @@ class SipMessage:
                 break
             else:
                 key, value = line.split(":", maxsplit=1)
-                headers[key.lower()] = value.strip()
+                headers[key.lower() if header_lowercase else key] = value.strip()
 
         body = message[offset:]
         return SipMessage(protocol, method, request_uri, code, reason, headers, body)
@@ -220,6 +220,11 @@ def get_rtp_info(body: str) -> RtpInfo:
     return RtpInfo(rtp_ip=rtp_ip, rtp_port=rtp_port, payload_type=opus_payload_type)
 
 
+def get_header(headers: dict[str, str], name: str) -> tuple[str, str] | None:
+    """Get a header entry using a case insensitive key comparison."""
+    return next(((k, v) for k, v in headers.items() if k.lower() == name.lower()), None)
+
+
 class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
     """UDP server for the Session Initiation Protocol (SIP)."""
 
@@ -289,12 +294,14 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             (destination.host, destination.port),
         )
 
+        invite_msg = SipMessage.parse_sip(invite_text, False)
+
         return CallInfo(
             caller_endpoint=destination,
             local_endpoint=source,
             caller_rtp_port=rtp_port,
             server_ip=source.host,
-            headers={"call-id": call_id},
+            headers=invite_msg.headers,
         )
 
     def hang_up(self, call_info: CallInfo):
@@ -302,12 +309,13 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if self.transport is None:
             raise RuntimeError("No transport available for sending hangup.")
 
+        call_id = get_header(call_info.headers, 'call-id')[1]
         bye_lines = [
             f"BYE {call_info.caller_endpoint.uri} SIP/2.0",
             f"Via: SIP/2.0/UDP {call_info.local_endpoint.host}:{call_info.local_endpoint.port}",
             f"From: {call_info.local_endpoint.sip_header}",
             f"To: {call_info.caller_endpoint.sip_header}",
-            f"Call-ID: {call_info.headers['call-id']}",
+            f"Call-ID: {call_id}",
             "CSeq: 51 BYE",
             f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
             "Content-Length: 0",
@@ -328,17 +336,27 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         if self.transport is None:
             raise RuntimeError("No transport available for sending cancel.")
 
-        cancel_lines = [
-            f"CANCEL {call_info.caller_endpoint.uri} SIP/2.0",
-            f"Via: SIP/2.0/UDP {call_info.local_endpoint.host}:{call_info.local_endpoint.port}",
-            f"From: {call_info.local_endpoint.sip_header}",
-            f"To: {call_info.caller_endpoint.sip_header}",
-            f"Call-ID: {call_info.headers['call-id']}",
-            "CSeq: 51 CANCEL",
-            f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
-            "Content-Length: 0",
-            "",
+        required_headers = ("via", "from", "to", "call-id")
+
+        cancel_headers = [
+            f"{k}: {v}"
+            for k, v in call_info.headers.items()
+            if k.lower() in required_headers
         ]
+
+        cseq_header, cseq_value = get_header(call_info.headers, "cseq")
+        cseq_num = cseq_value.split()[0]
+
+        cancel_lines = (
+            [f"CANCEL {call_info.caller_endpoint.uri} SIP/2.0"]
+            + cancel_headers
+            + [
+                f"{cseq_header}: {cseq_num} CANCEL",
+                f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
+                "Content-Length: 0",
+                "",
+            ]
+        )
         _LOGGER.debug("Canceling call...")
         cancel_text = _CRLF.join(cancel_lines) + _CRLF
         cancel_bytes = cancel_text.encode("utf-8")
@@ -347,7 +365,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
             (call_info.caller_endpoint.host, call_info.caller_endpoint.port),
         )
 
-        self._end_outgoing_call(call_info.headers["call-id"])
+        self._end_outgoing_call(get_header(call_info.headers, "call-id")[1])
         self.on_hangup(call_info)
 
     def _register_outgoing_call(self, call_id: str, rtp_port: int):
