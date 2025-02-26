@@ -500,6 +500,31 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 # TODO: Verify that the call / sequence IDs match our outgoing INVITE
                 _LOGGER.debug("Received response [%s]", message)
                 is_ok = smsg.code == "200" and smsg.reason == "OK"
+                if smsg.code == "487":
+                    # A 487 Request Terminated will be sent in response to a Cancel message
+                    _LOGGER.debug("Got 487 Request Terminated")
+                    caller_endpoint = None
+                    if smsg.headers.get("to") is not None:
+                        caller_endpoint = SipEndpoint(smsg.headers.get("to", ""))
+                    else:
+                        caller_endpoint = get_sip_endpoint(
+                            caller_ip, port=caller_sip_port
+                        )
+                    cseq_num = get_header(smsg.headers, "cseq")[1].split()[0]
+                    ack_lines = [
+                        f"ACK {caller_endpoint.uri} SIP/2.0",
+                        f"Via: {smsg.headers['via']}",
+                        f"From: {smsg.headers['from']}",
+                        f"To: {smsg.headers['to']}",
+                        f"Call-ID: {smsg.headers['call-id']}",
+                        f"CSeq: {cseq_num} ACK",
+                        f"User-Agent: {VOIP_UTILS_AGENT} 1.0",
+                        "Content-Length: 0",
+                    ]
+                    ack_text = _CRLF.join(ack_lines) + _CRLF
+                    ack_bytes = ack_text.encode("utf-8")
+                    self.transport.sendto(ack_bytes, (caller_ip, caller_sip_port))
+                    return
                 if not is_ok:
                     _LOGGER.debug("Received non-OK response [%s]", message)
                     return
