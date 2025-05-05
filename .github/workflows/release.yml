@@ -1,0 +1,29 @@
+name: Upload Python Package
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/py-improv-ble-client
+    permissions:
+      id-token: write
+    steps:
+    - uses: actions/checkout@v4.2.2
+    - name: Set up Python
+      uses: actions/setup-python@v5.6.0
+      with:
+        python-version: '3.13'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build wheel
+    - name: Build package
+      run: python -m build
+    - name: Publish package
+      uses: pypa/gh-action-pypi-publish@v1.12.4
