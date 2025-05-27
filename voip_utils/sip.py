@@ -415,13 +415,10 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     raise ValueError("Empty receiver URI")
 
                 caller_endpoint = None
-                # The From header should give us the URI used for sending SIP messages to the device
-                if smsg.headers.get("from") is not None:
-                    caller_endpoint = SipEndpoint(smsg.headers.get("from", ""))
-                # We can try using the Contact header as a fallback
-                elif smsg.headers.get("contact") is not None:
+                # The Contact header should give us the URI used for subsequent requests
+                if smsg.headers.get("contact") is not None:
                     caller_endpoint = SipEndpoint(smsg.headers.get("contact", ""))
-                # If all else fails try to generate a URI based on the IP and port from the address the message came from
+                # If all that fails try to generate a URI based on the IP and port from the address the message came from
                 else:
                     caller_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
