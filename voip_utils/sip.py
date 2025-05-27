@@ -9,6 +9,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+import secrets
 
 from .const import OPUS_PAYLOAD_TYPE
 from .error import VoipError
@@ -696,10 +697,16 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         ]
         body = _CRLF.join(body_lines)
 
+        to_tag = ""
+        # Check if the TO header already includes a tag
+        match = re.search(r';tag=[^;]+', call_info.headers["to"])
+        if not match:
+            to_tag = ";tag="+secrets.token_hex(8)
+        
         response_headers = {
             "Via": call_info.headers["via"],
             "From": call_info.headers["from"],
-            "To": call_info.headers["to"],
+            "To": call_info.headers["to"] + to_tag,  # Append the tag if necessary
             "Call-ID": call_info.headers["call-id"],
             "Content-Type": "application/sdp",
             "Content-Length": len(body),
