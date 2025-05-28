@@ -99,7 +99,7 @@ class SipMessage:
         first_line = True
 
         # See: https://datatracker.ietf.org/doc/html/rfc3261
-        for i, line in enumerate(lines):
+        for line in lines:
             if first_line:
                 if line:
                     offset += len(line) + len(_CRLF)
