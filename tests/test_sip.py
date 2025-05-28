@@ -87,6 +87,63 @@ def test_get_sip_endpoint_with_scheme():
     assert endpoint.username is None
     assert endpoint.uri == "sips:example.com"
 
+def test_parse_freepbx_options():
+    options_lines = [
+        "",
+        "OPTIONS sip:10.5.1.2:5060 SIP/2.0"
+        "Via: SIP/2.0/UDP 10.5.1.3:5060;rport;branch=z9hG4bKPj67dd8ad6-5b27-4860-b9fb-8bae195d6443"
+        "From: <sip:HomeAssistant@10.5.1.3>;tag=bab3c78d-7659-466f-8326-61d6da0c5267"
+        "To: <sip:10.5.1.2>"
+        "Contact: <sip:999@10.5.1.3:5060>"
+        "Call-ID: 9aa75329-b33d-4e27-b2e3-73ab30677942"
+        "CSeq: 14010 OPTIONS"
+        "Max-Forwards: 70"
+        "User-Agent: FPBX-17.0.19.27(21.8.0)"
+        "Content-Length:  0"
+        "",
+    ]
+    options_text = _CRLF.join(options_lines) + _CRLF
+    options_msg = SipMessage.parse_sip(options_text, False)
+    assert options_msg is not None
+
+def test_parse_with_body():
+    invite_lines = [
+        "",
+        "INVITE sip:6002@192.168.0.18 SIP/2.0",
+        "Via: SIP/2.0/UDP 192.168.0.18:5062",
+        "From: sip:5000@192.168.0.18:5062",
+        "Contact: sip:5000@192.168.0.18:5062",
+        "To: sip:6002@192.168.0.18",
+        "Call-ID: 5443482144267586",
+        "CSeq: 50 INVITE",
+        "User-Agent: test-agent 1.0",
+        "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
+        "Accept: application/sdp, application/dtmf-relay",
+        "Content-Type: application/sdp",
+        "Content-Length: 391",
+        "",
+        "v=0",
+        "o=5000 5443482144267586 5443482144267586 IN IP4 192.168.0.18",
+        "s=Talk",
+        "c=IN IP4 192.168.0.18",
+        "t=0 0",
+        "m=audio 59756 RTP/AVP 123 96 101 103 104",
+        "a=sendrecv",
+        "a=rtpmap:96 opus/48000/2",
+        "a=fmtp:96 useinbandfec=0",
+        "a=rtpmap:123 opus/48000/2",
+        "a=fmtp:123 maxplaybackrate=16000",
+        "a=rtpmap:101 telephone-event/48000",
+        "a=rtpmap:103 telephone-event/16000",
+        "a=rtpmap:104 telephone-event/8000",
+        "a=ptime:20"
+    ]
+    invite_text = _CRLF.join(invite_lines) + _CRLF
+    invite_msg = SipMessage.parse_sip(invite_text, False)
+    assert invite_msg is not None
+    assert invite_msg.body is not None
+    assert invite_msg.body.startswith("v=0")
+
 class MockSipDatagramProtocol(SipDatagramProtocol):
     def on_call(self, call_info: CallInfo):
         pass
