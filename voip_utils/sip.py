@@ -96,24 +96,30 @@ class SipMessage:
         headers: dict[str, str] = {}
         offset: int = 0
 
+        first_line = True
+
         # See: https://datatracker.ietf.org/doc/html/rfc3261
         for i, line in enumerate(lines):
-            if line:
-                offset += len(line) + len(_CRLF)
-
-            if i == 0:
-                line_parts = line.split()
-                if line_parts[0].startswith("SIP"):
-                    protocol = line_parts[0]
-                    code = line_parts[1]
-                    reason = line_parts[2]
+            if first_line:
+                if line:
+                    offset += len(line) + len(_CRLF)
+                    line_parts = line.split()
+                    if line_parts[0].startswith("SIP"):
+                        protocol = line_parts[0]
+                        code = line_parts[1]
+                        reason = line_parts[2]
+                    else:
+                        method = line_parts[0]
+                        request_uri = line_parts[1]
+                        protocol = line_parts[2]
+                    first_line = False
                 else:
-                    method = line_parts[0]
-                    request_uri = line_parts[1]
-                    protocol = line_parts[2]
+                    offset += len(_CRLF)
             elif not line:
+                offset += len(_CRLF)
                 break
             else:
+                offset += len(line) + len(_CRLF)
                 key, value = line.split(":", maxsplit=1)
                 headers[key.lower() if header_lowercase else key] = value.strip()
 

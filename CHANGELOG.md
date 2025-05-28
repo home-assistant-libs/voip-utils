@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+- Handle empty lines at start of message
+
+## 0.3.2
+
+- Compliant cancel message
+
 ## 0.3.1
 
 - Add cancel_call to stop ringing
