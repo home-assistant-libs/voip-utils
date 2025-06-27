@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
-import secrets
 
 from .const import OPUS_PAYLOAD_TYPE
 from .error import VoipError
@@ -699,10 +699,10 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         to_tag = ""
         # Check if the TO header already includes a tag
-        match = re.search(r';tag=[^;]+', call_info.headers["to"])
+        match = re.search(r";tag=[^;]+", call_info.headers["to"])
         if not match:
-            to_tag = ";tag="+secrets.token_hex(8)
-        
+            to_tag = ";tag=" + secrets.token_hex(8)
+
         response_headers = {
             "Via": call_info.headers["via"],
             "From": call_info.headers["from"],
