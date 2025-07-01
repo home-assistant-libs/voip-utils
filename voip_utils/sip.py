@@ -177,6 +177,8 @@ def get_sip_endpoint(
     scheme: Optional[str] = "sip",
     username: Optional[str] = None,
     description: Optional[str] = None,
+    parameters: Optional[dict[str,str]] = None,
+    headers: Optional[dict[str,str]] = None,
 ) -> SipEndpoint:
     uri = f"{scheme}:"
     if username:
@@ -184,6 +186,15 @@ def get_sip_endpoint(
     uri += host
     if port:
         uri += f":{port}"
+    if parameters:
+        for key, value in parameters.items():
+            if value:
+                uri += f";{key}={value}"
+            else:
+                uri += f";{key}"
+    if headers:
+        parts = [f"{key}={value}" for key, value in headers.items()]
+        uri += "?" + "&".join(parts)
     if description:
         uri = f'"{description}" <{uri}>'
     return SipEndpoint(uri)
