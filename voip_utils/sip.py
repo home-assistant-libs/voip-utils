@@ -44,6 +44,8 @@ class SipEndpoint:
     port: int = field(init=False)
     username: str | None = field(init=False)
     description: str | None = field(init=False)
+    parameters: dict[str, str] | None = field(init=False)
+    headers: dict[str, str] | None = field(init=False)
 
     def __post_init__(self):
         header_pattern = re.compile(
@@ -58,7 +60,7 @@ class SipEndpoint:
                 self.description = None
             self.uri = header_match.group("uri")
             uri_pattern = re.compile(
-                r"(?P<scheme>sips?):(?:(?P<user>[^@]+)@)?(?P<host>[^:;?]+)(?::(?P<port>\d+))?"
+                r"(?P<scheme>sips?):(?:(?P<user>[^@]+)@)?(?P<host>[^:;?]+)(?::(?P<port>\d+))?(?P<params>(?:;[^;=?]+(?:=[^;?]*)?)*)?(?:\?(?P<headers>[^#]*))?"
             )
             uri_match = uri_pattern.match(self.uri)
             if uri_match is None:
@@ -69,8 +71,29 @@ class SipEndpoint:
             self.port = (
                 int(uri_match.group("port")) if uri_match.group("port") else SIP_PORT
             )
+            self.parameters: dict[str, str] = {}
+            if uri_match.group("params"):
+                for param in uri_match.group("params").lstrip(";").split(";"):
+                    if "=" in param:
+                        key, value = param.split("=", 1)
+                        self.parameters[key.strip()] = value.strip()
+                    elif param.strip():
+                        self.parameters[param.strip()] = ""
+            self.headers: dict[str, str] = {}
+            if uri_match.group("headers"):
+                for pair in uri_match.group("headers").split("&"):
+                    if "=" in pair:
+                        key, value = pair.split("=", 1)
+                        self.headers[key.strip()] = value.strip()
+
         else:
             raise ValueError("Invalid SIP header")
+
+    @property
+    def base_uri(self) -> str:
+        user_part = f"{self.username}@" if self.username else ""
+        port_part = f":{self.port}" if self.port != SIP_PORT else ""
+        return f"{self.scheme}:{user_part}{self.host}{port_part}"
 
 
 @dataclass
@@ -177,8 +200,8 @@ def get_sip_endpoint(
     scheme: Optional[str] = "sip",
     username: Optional[str] = None,
     description: Optional[str] = None,
-    parameters: Optional[dict[str,str]] = None,
-    headers: Optional[dict[str,str]] = None,
+    parameters: Optional[dict[str, str]] = None,
+    headers: Optional[dict[str, str]] = None,
 ) -> SipEndpoint:
     uri = f"{scheme}:"
     if username:
@@ -708,16 +731,25 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         ]
         body = _CRLF.join(body_lines)
 
-        to_tag = ""
+        to_header = SipEndpoint(call_info.headers["to"])
         # Check if the TO header already includes a tag
-        match = re.search(r";tag=[^;]+", call_info.headers["to"])
-        if not match:
-            to_tag = ";tag=" + secrets.token_hex(8)
+        if "tag" not in to_header.parameters:
+            new_params = to_header.parameters.copy() if to_header.parameters else {}
+            new_params["tag"] = secrets.token_hex(8)
+            to_header = get_sip_endpoint(
+                host=to_header.host,
+                port=to_header.port if to_header.port != SIP_PORT else None,
+                scheme=to_header.scheme,
+                username=to_header.username,
+                description=to_header.description,
+                parameters=new_params,
+                headers=to_header.headers,
+            )
 
         response_headers = {
             "Via": call_info.headers["via"],
             "From": call_info.headers["from"],
-            "To": call_info.headers["to"] + to_tag,  # Append the tag if necessary
+            "To": to_header.sip_header,  # Append the tag if necessary
             "Call-ID": call_info.headers["call-id"],
             "Content-Type": "application/sdp",
             "Content-Length": len(body),

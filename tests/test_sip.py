@@ -51,6 +51,52 @@ def test_parse_header_for_uri_no_username():
     assert endpoint.uri == "sip:example.com"
 
 
+def test_parse_header_for_parameters():
+    endpoint = SipEndpoint("Test <sip:example.com;transport=tcp;lr;method=INVITE>")
+    assert endpoint.description == "Test"
+    assert endpoint.uri == "sip:example.com;transport=tcp;lr;method=INVITE"
+    assert endpoint.host == "example.com"
+    assert endpoint.parameters
+    assert "transport" in endpoint.parameters
+    assert "lr" in endpoint.parameters
+    assert "method" in endpoint.parameters
+    assert endpoint.parameters["transport"] == "tcp"
+    assert not endpoint.parameters["lr"]
+    assert endpoint.parameters["method"] == "INVITE"
+
+
+def test_parse_header_for_uri_headers():
+    endpoint = SipEndpoint("Test <sip:example.com?priority=urgent&subject=Hello>")
+    assert endpoint.description == "Test"
+    assert endpoint.uri == "sip:example.com?priority=urgent&subject=Hello"
+    assert endpoint.host == "example.com"
+    assert endpoint.headers
+    assert "priority" in endpoint.headers
+    assert "subject" in endpoint.headers
+    assert endpoint.headers["priority"] == "urgent"
+    assert endpoint.headers["subject"] == "Hello"
+
+
+def test_parse_header_for_parameters_and_headers():
+    endpoint = SipEndpoint("Test <sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello>")
+    assert endpoint.description == "Test"
+    assert endpoint.uri == "sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello"
+    assert endpoint.host == "example.com"
+    assert endpoint.parameters
+    assert "transport" in endpoint.parameters
+    assert "lr" in endpoint.parameters
+    assert "method" in endpoint.parameters
+    assert endpoint.parameters["transport"] == "tcp"
+    assert not endpoint.parameters["lr"]
+    assert endpoint.parameters["method"] == "INVITE"
+    assert endpoint.headers
+    assert "priority" in endpoint.headers
+    assert "subject" in endpoint.headers
+    assert endpoint.headers["priority"] == "urgent"
+    assert endpoint.headers["subject"] == "Hello"
+    assert endpoint.base_uri == "sip:example.com"
+
+
 def test_get_sip_endpoint():
     endpoint = get_sip_endpoint("example.com")
     assert endpoint.host == "example.com"
