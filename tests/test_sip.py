@@ -1,6 +1,6 @@
 """Test voip_utils SIP functionality."""
 
-from voip_utils.sip import CallInfo, SdpInfo, SipDatagramProtocol, SipEndpoint, SipMessage, get_sip_endpoint
+from voip_utils.sip import CallInfo, SdpInfo, SipDatagramProtocol, SipEndpoint, SipMessage, get_sip_endpoint, parse_via_header
 from unittest.mock import Mock
 
 _CRLF = "\r\n"
@@ -142,6 +142,34 @@ def test_get_sip_endpoint_with_description_and_parameters():
     assert endpoint.uri == "sip:example.com"
     assert endpoint.sip_header == '"Test Endpoint" <sip:example.com>;tag=decafc0ffee'
 
+def test_parse_via_header():
+    via_header_value = "SIP/2.0/UDP testhost:5061"
+    result = parse_via_header(via_header_value)
+    assert result
+    host, port = result
+    assert host == "testhost"
+    assert port == 5061
+
+def test_parse_via_header_default_port():
+    via_header_value = "SIP/2.0/UDP testhost"
+    result = parse_via_header(via_header_value)
+    assert result
+    host, port = result
+    assert host == "testhost"
+    assert port == 5060
+
+def test_parse_via_header_with_parameters():
+    via_header_value = "SIP/2.0/UDP testhost;branch=brnch12345"
+    result = parse_via_header(via_header_value)
+    assert result
+    host, port = result
+    assert host == "testhost"
+    assert port == 5060
+
+def test_parse_via_header_error():
+    via_header_value = "some garbage text"
+    result = parse_via_header(via_header_value)
+    assert result is None
 
 def test_parse_freepbx_options():
     options_lines = [
@@ -370,3 +398,42 @@ def test_answer_to_generated_tag_with_desc():
     protocol.answer(call_info, 12345)
 
     transport.sendto.assert_called_once_with(TagBytesMatcher(b'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: "Test Endpoint" <sip:destination>;tag=', b'\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n', 16), ('destination', 5060))
+
+def test_cancel_via():
+    protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
+    source = get_sip_endpoint("testsource")
+    destination = get_sip_endpoint("destination")
+    invite_lines = [
+        f"INVITE {destination.uri} SIP/2.0",
+        f"Via: SIP/2.0/UDP {source.host}:{source.port}",
+        f"From: {source.sip_header}",
+        f"Contact: {source.sip_header}",
+        f"To: {destination.sip_header}",
+        f"Call-ID: 100",
+        "CSeq: 50 INVITE",
+        f"User-Agent: test-agent 1.0",
+        "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
+        "Accept: application/sdp, application/dtmf-relay",
+        "Content-Type: application/sdp",
+        "Content-Length: 0",
+        "",
+    ]
+    invite_text = _CRLF.join(invite_lines) + _CRLF
+    invite_msg = SipMessage.parse_sip(invite_text, False)
+
+    call_info = CallInfo(
+        caller_endpoint=destination,
+        local_endpoint=source,
+        caller_rtp_port=12345,
+        server_ip=source.host,
+        headers=invite_msg.headers,
+        via_host="viahost",
+        via_port=5061
+    )
+
+    transport = Mock()
+    protocol.connection_made(transport)
+    protocol.cancel_call(call_info)
+
+    transport.sendto.assert_called_once_with(b'CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n', ('viahost', 5061))
+
