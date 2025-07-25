@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.4
+
+- Add tag parameter to To header if missing
+
 ## 0.3.3
 
 - Handle empty lines at start of message

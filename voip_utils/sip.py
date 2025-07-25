@@ -44,12 +44,25 @@ class SipEndpoint:
     port: int = field(init=False)
     username: str | None = field(init=False)
     description: str | None = field(init=False)
-    parameters: dict[str, str] | None = field(init=False)
-    headers: dict[str, str] | None = field(init=False)
+    uri_parameters: dict[str, str] | None = field(init=False)
+    uri_headers: dict[str, str] | None = field(init=False)
+    header_parameters: dict[str, str] | None = field(init=False)
 
     def __post_init__(self):
         header_pattern = re.compile(
-            r'\s*((?P<description>\b\w+\b|"[^"]+")\s*)?<?(?P<uri>sips?:[^>]+)>?.*'
+            r"""
+           ^\s*
+           (?:(?P<description>\b[^<\s"]+\b|"[^"]+")\s*)?
+           (?:
+            <(?P<uri_bracketed>sips?:[^>]+)>
+            |
+            (?P<uri_unbracketed>sips?:[^\s;]+)
+           )
+           \s*
+           (?P<header_params>(?:;\s*[^=;]+(?:=[^;]*)?)*)
+           .*$
+        """,
+            re.VERBOSE | re.IGNORECASE,
         )
         header_match = header_pattern.match(self.sip_header)
         if header_match is not None:
@@ -58,7 +71,11 @@ class SipEndpoint:
                 self.description = description_token.strip('"')
             else:
                 self.description = None
-            self.uri = header_match.group("uri")
+            self.uri = (
+                header_match.group("uri_bracketed")
+                if header_match.group("uri_bracketed")
+                else header_match.group("uri_unbracketed")
+            )
             uri_pattern = re.compile(
                 r"(?P<scheme>sips?):(?:(?P<user>[^@]+)@)?(?P<host>[^:;?]+)(?::(?P<port>\d+))?(?P<params>(?:;[^;=?]+(?:=[^;?]*)?)*)?(?:\?(?P<headers>[^#]*))?"
             )
@@ -71,20 +88,28 @@ class SipEndpoint:
             self.port = (
                 int(uri_match.group("port")) if uri_match.group("port") else SIP_PORT
             )
-            self.parameters: dict[str, str] = {}
+            self.uri_parameters: dict[str, str] = {}
             if uri_match.group("params"):
                 for param in uri_match.group("params").lstrip(";").split(";"):
                     if "=" in param:
                         key, value = param.split("=", 1)
-                        self.parameters[key.strip()] = value.strip()
+                        self.uri_parameters[key.strip()] = value.strip()
                     elif param.strip():
-                        self.parameters[param.strip()] = ""
-            self.headers: dict[str, str] = {}
+                        self.uri_parameters[param.strip()] = ""
+            self.uri_headers: dict[str, str] = {}
             if uri_match.group("headers"):
                 for pair in uri_match.group("headers").split("&"):
                     if "=" in pair:
                         key, value = pair.split("=", 1)
-                        self.headers[key.strip()] = value.strip()
+                        self.uri_headers[key.strip()] = value.strip()
+            self.header_parameters: dict[str, str] = {}
+            if header_match.group("header_params"):
+                for param in header_match.group("header_params").lstrip(";").split(";"):
+                    if "=" in param:
+                        key, value = param.split("=", 1)
+                        self.header_parameters[key.strip()] = value.strip()
+                    elif param.strip():
+                        self.header_parameters[param.strip()] = ""
 
         else:
             raise ValueError("Invalid SIP header")
@@ -200,8 +225,9 @@ def get_sip_endpoint(
     scheme: Optional[str] = "sip",
     username: Optional[str] = None,
     description: Optional[str] = None,
-    parameters: Optional[dict[str, str]] = None,
-    headers: Optional[dict[str, str]] = None,
+    uri_parameters: Optional[dict[str, str]] = None,
+    uri_headers: Optional[dict[str, str]] = None,
+    header_parameters: Optional[dict[str, str]] = None,
 ) -> SipEndpoint:
     uri = f"{scheme}:"
     if username:
@@ -209,17 +235,23 @@ def get_sip_endpoint(
     uri += host
     if port:
         uri += f":{port}"
-    if parameters:
-        for key, value in parameters.items():
+    if uri_parameters:
+        for key, value in uri_parameters.items():
             if value:
                 uri += f";{key}={value}"
             else:
                 uri += f";{key}"
-    if headers:
-        parts = [f"{key}={value}" for key, value in headers.items()]
+    if uri_headers:
+        parts = [f"{key}={value}" for key, value in uri_headers.items()]
         uri += "?" + "&".join(parts)
     if description:
         uri = f'"{description}" <{uri}>'
+    if header_parameters:
+        for key, value in header_parameters.items():
+            if value:
+                uri += f";{key}={value}"
+            else:
+                uri += f";{key}"
     return SipEndpoint(uri)
 
 
@@ -733,8 +765,12 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
 
         to_header = SipEndpoint(call_info.headers["to"])
         # Check if the TO header already includes a tag
-        if "tag" not in to_header.parameters:
-            new_params = to_header.parameters.copy() if to_header.parameters else {}
+        if "tag" not in to_header.header_parameters:
+            new_params = (
+                to_header.header_parameters.copy()
+                if to_header.header_parameters
+                else {}
+            )
             new_params["tag"] = secrets.token_hex(8)
             to_header = get_sip_endpoint(
                 host=to_header.host,
@@ -742,8 +778,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 scheme=to_header.scheme,
                 username=to_header.username,
                 description=to_header.description,
-                parameters=new_params,
-                headers=to_header.headers,
+                uri_parameters=to_header.uri_parameters,
+                uri_headers=to_header.uri_headers,
+                header_parameters=new_params,
             )
 
         response_headers = {
