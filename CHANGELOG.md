@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- Cleanup RTP/RTCP servers on hangup
+
 ## 0.3.4
 
 - Add tag parameter to To header if missing

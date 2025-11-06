@@ -41,6 +41,8 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         self.valid_protocol_factory = valid_protocol_factory
         self.invalid_protocol_factory = invalid_protocol_factory
         self._tasks: Set[asyncio.Future[Any]] = set()
+        self._rtp_transport: Optional[asyncio.BaseTransport] = None
+        self._rtcp_transport: Optional[asyncio.BaseTransport] = None
 
     def is_valid_call(self, call_info: CallInfo) -> bool:
         """Filter calls."""
@@ -108,6 +110,18 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         # Tell caller to start sending/receiving RTP audio
         self.answer(call_info, rtp_port)
 
+    def on_hangup(self, call_info: CallInfo):
+        """Handle the end of a call."""
+        _LOGGER.debug("Clean up RTP/RTCP resources on hangup")
+        if self._rtcp_transport:
+            _LOGGER.debug("Shutting down RTCP transport")
+            self._rtcp_transport.close()
+            self._rtcp_transport = None
+        if self._rtp_transport:
+            _LOGGER.debug("Shutting down RTP transport")
+            self._rtp_transport.close()
+            self._rtp_transport = None
+
     async def _create_rtp_server(
         self,
         protocol_factory: CallProtocolFactory,
@@ -121,13 +135,13 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         loop = asyncio.get_running_loop()
 
         # RTCP server
-        await loop.create_datagram_endpoint(
+        self._rtcp_transport, _ = await loop.create_datagram_endpoint(
             lambda: RtcpDatagramProtocol(rtcp_state),
             (rtp_ip, rtp_port + 1),
         )
 
         # RTP server
-        await loop.create_datagram_endpoint(
+        self._rtp_transport, _ = await loop.create_datagram_endpoint(
             partial(protocol_factory, call_info, rtcp_state),
             (rtp_ip, rtp_port),
         )
