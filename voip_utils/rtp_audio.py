@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-import opuslib
+import opuslib_next as opuslib
 
 from .const import OPUS_PAYLOAD_TYPE
 from .error import RtpError
