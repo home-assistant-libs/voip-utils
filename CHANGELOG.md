@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Update to opuslib-next
+
 ## 0.3.5
 
 - Cleanup RTP/RTCP servers on hangup
