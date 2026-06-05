@@ -2,6 +2,7 @@ from voip_utils import pyaudioop
 
 byteorder = "little"
 
+
 def pack(width, data):
     return b"".join(v.to_bytes(width, byteorder, signed=True) for v in data)
 
