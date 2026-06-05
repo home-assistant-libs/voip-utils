@@ -20,6 +20,7 @@ builder.create(_VENV_DIR)
 # Upgrade dependencies
 pip = [context.env_exe, "-m", "pip"]
 subprocess.check_call(pip + ["install", "--upgrade", "pip"])
+subprocess.check_call(pip + ["install", "--upgrade", "setuptools", "wheel"])
 
 # Install requirements
 subprocess.check_call(pip + ["install", "-e", str(_PROGRAM_DIR)])

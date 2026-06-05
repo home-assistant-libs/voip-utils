@@ -1,9 +1,19 @@
 """Test voip_utils SIP functionality."""
 
-from voip_utils.sip import CallInfo, SdpInfo, SipDatagramProtocol, SipEndpoint, SipMessage, get_sip_endpoint, parse_via_header
 from unittest.mock import Mock
 
+from voip_utils.sip import (
+    CallInfo,
+    SdpInfo,
+    SipDatagramProtocol,
+    SipEndpoint,
+    SipMessage,
+    get_sip_endpoint,
+    parse_via_header,
+)
+
 _CRLF = "\r\n"
+
 
 def test_parse_header_for_uri():
     endpoint = SipEndpoint('"Test Name" <sip:12345@example.com>')
@@ -78,9 +88,14 @@ def test_parse_header_for_uri_headers():
 
 
 def test_parse_header_for_parameters_and_headers():
-    endpoint = SipEndpoint("Test <sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello>")
+    endpoint = SipEndpoint(
+        "Test <sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello>"
+    )
     assert endpoint.description == "Test"
-    assert endpoint.uri == "sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello"
+    assert (
+        endpoint.uri
+        == "sip:example.com;transport=tcp;lr;method=INVITE?priority=urgent&subject=Hello"
+    )
     assert endpoint.host == "example.com"
     assert endpoint.uri_parameters
     assert "transport" in endpoint.uri_parameters
@@ -133,14 +148,20 @@ def test_get_sip_endpoint_with_scheme():
     assert endpoint.username is None
     assert endpoint.uri == "sips:example.com"
 
+
 def test_get_sip_endpoint_with_description_and_parameters():
-    endpoint = get_sip_endpoint("example.com", description="Test Endpoint", header_parameters={"tag": "decafc0ffee"})
+    endpoint = get_sip_endpoint(
+        "example.com",
+        description="Test Endpoint",
+        header_parameters={"tag": "decafc0ffee"},
+    )
     assert endpoint.host == "example.com"
     assert endpoint.port == 5060
     assert endpoint.description == "Test Endpoint"
     assert endpoint.username is None
     assert endpoint.uri == "sip:example.com"
     assert endpoint.sip_header == '"Test Endpoint" <sip:example.com>;tag=decafc0ffee'
+
 
 def test_parse_via_header():
     via_header_value = "SIP/2.0/UDP testhost:5061"
@@ -150,6 +171,7 @@ def test_parse_via_header():
     assert host == "testhost"
     assert port == 5061
 
+
 def test_parse_via_header_default_port():
     via_header_value = "SIP/2.0/UDP testhost"
     result = parse_via_header(via_header_value)
@@ -157,6 +179,7 @@ def test_parse_via_header_default_port():
     host, port = result
     assert host == "testhost"
     assert port == 5060
+
 
 def test_parse_via_header_with_parameters():
     via_header_value = "SIP/2.0/UDP testhost;branch=brnch12345"
@@ -166,10 +189,12 @@ def test_parse_via_header_with_parameters():
     assert host == "testhost"
     assert port == 5060
 
+
 def test_parse_via_header_error():
     via_header_value = "some garbage text"
     result = parse_via_header(via_header_value)
     assert result is None
+
 
 def test_parse_freepbx_options():
     options_lines = [
@@ -189,6 +214,7 @@ def test_parse_freepbx_options():
     options_text = _CRLF.join(options_lines) + _CRLF
     options_msg = SipMessage.parse_sip(options_text, False)
     assert options_msg is not None
+
 
 def test_parse_with_body():
     invite_lines = [
@@ -220,7 +246,7 @@ def test_parse_with_body():
         "a=rtpmap:101 telephone-event/48000",
         "a=rtpmap:103 telephone-event/16000",
         "a=rtpmap:104 telephone-event/8000",
-        "a=ptime:20"
+        "a=ptime:20",
     ]
     invite_text = _CRLF.join(invite_lines) + _CRLF
     invite_msg = SipMessage.parse_sip(invite_text, False)
@@ -228,9 +254,11 @@ def test_parse_with_body():
     assert invite_msg.body is not None
     assert invite_msg.body.startswith("v=0")
 
+
 class MockSipDatagramProtocol(SipDatagramProtocol):
     def on_call(self, call_info: CallInfo):
         pass
+
 
 def test_cancel():
     protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
@@ -242,9 +270,9 @@ def test_cancel():
         f"From: {source.sip_header}",
         f"Contact: {source.sip_header}",
         f"To: {destination.sip_header}",
-        f"Call-ID: 100",
+        "Call-ID: 100",
         "CSeq: 50 INVITE",
-        f"User-Agent: test-agent 1.0",
+        "User-Agent: test-agent 1.0",
         "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
         "Accept: application/sdp, application/dtmf-relay",
         "Content-Type: application/sdp",
@@ -266,10 +294,13 @@ def test_cancel():
     protocol.connection_made(transport)
     protocol.cancel_call(call_info)
 
-    transport.sendto.assert_called_once_with(b'CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n', ('destination', 5060))
+    transport.sendto.assert_called_once_with(
+        b"CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n",
+        ("destination", 5060),
+    )
+
 
 def test_answer_to_add_tag():
-
     protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
     transport = Mock()
     source = get_sip_endpoint("testsource")
@@ -281,9 +312,9 @@ def test_answer_to_add_tag():
         f"From: {source.sip_header}",
         f"Contact: {source.sip_header}",
         f"To: {destination.sip_header};tag=deadbeef",
-        f"Call-ID: 100",
+        "Call-ID: 100",
         "CSeq: 50 INVITE",
-        f"User-Agent: test-agent 1.0",
+        "User-Agent: test-agent 1.0",
         "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
         "Accept: application/sdp, application/dtmf-relay",
         "Content-Type: application/sdp",
@@ -304,7 +335,11 @@ def test_answer_to_add_tag():
     protocol.connection_made(transport)
     protocol.answer(call_info, 12345)
 
-    transport.sendto.assert_called_once_with(b'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination;tag=deadbeef\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n', ('destination', 5060))
+    transport.sendto.assert_called_once_with(
+        b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination;tag=deadbeef\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n",
+        ("destination", 5060),
+    )
+
 
 class TagBytesMatcher:
     def __init__(self, prefix: bytes, suffix: bytes, expected_length: int):
@@ -317,14 +352,14 @@ class TagBytesMatcher:
             return False
         if not other.startswith(self.prefix) or not other.endswith(self.suffix):
             return False
-        middle = other[len(self.prefix):-len(self.suffix) or None]
+        middle = other[len(self.prefix) : -len(self.suffix) or None]
         return len(middle) == self.expected_length
 
     def __repr__(self):
         return f"<TagBytesMatcher(prefix={self.prefix}, expected_length={self.expected_length}, suffix={self.suffix}"
 
-def test_answer_to_generated_tag():
 
+def test_answer_to_generated_tag():
     protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
     transport = Mock()
     source = get_sip_endpoint("testsource")
@@ -336,9 +371,9 @@ def test_answer_to_generated_tag():
         f"From: {source.sip_header}",
         f"Contact: {source.sip_header}",
         f"To: {destination.sip_header}",
-        f"Call-ID: 100",
+        "Call-ID: 100",
         "CSeq: 50 INVITE",
-        f"User-Agent: test-agent 1.0",
+        "User-Agent: test-agent 1.0",
         "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
         "Accept: application/sdp, application/dtmf-relay",
         "Content-Type: application/sdp",
@@ -359,10 +394,17 @@ def test_answer_to_generated_tag():
     protocol.connection_made(transport)
     protocol.answer(call_info, 12345)
 
-    transport.sendto.assert_called_once_with(TagBytesMatcher(b'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination;tag=', b'\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n', 16), ('destination', 5060))
+    transport.sendto.assert_called_once_with(
+        TagBytesMatcher(
+            b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination;tag=",
+            b"\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n",
+            16,
+        ),
+        ("destination", 5060),
+    )
+
 
 def test_answer_to_generated_tag_with_desc():
-
     protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
     transport = Mock()
     source = get_sip_endpoint("testsource")
@@ -374,9 +416,9 @@ def test_answer_to_generated_tag_with_desc():
         f"From: {source.sip_header}",
         f"Contact: {source.sip_header}",
         f"To: {destination.sip_header}",
-        f"Call-ID: 100",
+        "Call-ID: 100",
         "CSeq: 50 INVITE",
-        f"User-Agent: test-agent 1.0",
+        "User-Agent: test-agent 1.0",
         "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
         "Accept: application/sdp, application/dtmf-relay",
         "Content-Type: application/sdp",
@@ -397,7 +439,15 @@ def test_answer_to_generated_tag_with_desc():
     protocol.connection_made(transport)
     protocol.answer(call_info, 12345)
 
-    transport.sendto.assert_called_once_with(TagBytesMatcher(b'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: "Test Endpoint" <sip:destination>;tag=', b'\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n', 16), ('destination', 5060))
+    transport.sendto.assert_called_once_with(
+        TagBytesMatcher(
+            b'SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: "Test Endpoint" <sip:destination>;tag=',
+            b"\r\nCall-ID: 100\r\nContent-Type: application/sdp\r\nContent-Length: 174\r\nCSeq: 50 INVITE\r\nContact: sip:testsource\r\nUser-Agent: username 5 version\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS\r\n\r\nv=0\r\no=username 5 1 IN IP4 testsource\r\ns=session\r\nc=IN IP4 testsource\r\nt=0 0\r\nm=audio 12345 RTP/AVP 123\r\na=rtpmap:123 opus/48000/2\r\na=ptime:20\r\na=maxptime:150\r\na=sendrecv\r\n\r\n",
+            16,
+        ),
+        ("destination", 5060),
+    )
+
 
 def test_cancel_via():
     protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
@@ -409,9 +459,9 @@ def test_cancel_via():
         f"From: {source.sip_header}",
         f"Contact: {source.sip_header}",
         f"To: {destination.sip_header}",
-        f"Call-ID: 100",
+        "Call-ID: 100",
         "CSeq: 50 INVITE",
-        f"User-Agent: test-agent 1.0",
+        "User-Agent: test-agent 1.0",
         "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE",
         "Accept: application/sdp, application/dtmf-relay",
         "Content-Type: application/sdp",
@@ -428,12 +478,14 @@ def test_cancel_via():
         server_ip=source.host,
         headers=invite_msg.headers,
         via_host="viahost",
-        via_port=5061
+        via_port=5061,
     )
 
     transport = Mock()
     protocol.connection_made(transport)
     protocol.cancel_call(call_info)
 
-    transport.sendto.assert_called_once_with(b'CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n', ('viahost', 5061))
-
+    transport.sendto.assert_called_once_with(
+        b"CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n",
+        ("viahost", 5061),
+    )

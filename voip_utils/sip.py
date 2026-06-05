@@ -48,7 +48,7 @@ class SipEndpoint:
     uri_headers: dict[str, str] | None = field(init=False)
     header_parameters: dict[str, str] | None = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         header_pattern = re.compile(
             r"""
            ^\s*
