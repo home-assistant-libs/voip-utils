@@ -1,5 +1,8 @@
 """Tests for call_bridge module."""
 
+# Tests deliberately exercise CallBridge internal helpers.
+# pylint: disable=protected-access
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -528,7 +531,7 @@ class TestCallBridge:
         """Test end_bridge hangs up (sends BYE) before closing, and closes RTCP."""
         manager = MagicMock()
         mock_protocol = MagicMock()
-        mock_protocol.hang_up = manager.hang_up
+        manager.attach_mock(mock_protocol.hang_up, "hang_up")
         source = get_sip_endpoint(host="127.0.0.1", port=5060)
 
         bridge = CallBridge(
@@ -539,8 +542,8 @@ class TestCallBridge:
 
         rtp_a = MagicMock()
         rtcp_a = MagicMock()
-        rtp_a.close = manager.rtp_a_close
-        rtcp_a.close = manager.rtcp_a_close
+        manager.attach_mock(rtp_a.close, "rtp_a_close")
+        manager.attach_mock(rtcp_a.close, "rtcp_a_close")
         bridge.bridge_state.call_a = BridgedCall(
             call_info=MagicMock(), rtp_transport=rtp_a, rtcp_transport=rtcp_a
         )
