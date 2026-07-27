@@ -4,8 +4,8 @@ import asyncio
 import logging
 import socket
 import struct
-import time
 from abc import ABC, abstractmethod
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Optional, Set
