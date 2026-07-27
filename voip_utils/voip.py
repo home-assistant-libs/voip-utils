@@ -1,4 +1,5 @@
 """Voice over IP (VoIP) implementation."""
+
 import asyncio
 import logging
 import socket
@@ -25,6 +26,15 @@ class RtcpState:
 
 
 CallProtocolFactory = Callable[[CallInfo, RtcpState], asyncio.Protocol]
+
+
+@dataclass
+class AudioOutputChunk:
+    data: bytes
+    rate: int
+    width: int
+    channels: int
+    is_end: bool = False
 
 
 class VoipDatagramProtocol(SipDatagramProtocol):
@@ -157,6 +167,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         channels: int = 1,
         opus_payload_type: int = OPUS_PAYLOAD_TYPE,
         rtcp_state: Optional[RtcpState] = None,
+        create_task: Callable[[Coroutine], asyncio.Task] | None = None,
     ) -> None:
         """Set up RTP server."""
         self.rtcp_state = rtcp_state
@@ -176,11 +187,16 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self._audio_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._rtp_input = RtpOpusInput(opus_payload_type=opus_payload_type)
         self._rtp_output = RtpOpusOutput(opus_payload_type=opus_payload_type)
+        self._create_task = create_task or asyncio.create_task
+        self._sender_task = None
+        self._output_audio_queue: asyncio.Queue = asyncio.Queue()
+        self._rtp_queue: asyncio.Queue = asyncio.Queue()
         self._is_connected: bool = False
 
     def disconnect(self):
         self._is_connected = False
         if self.transport is not None:
+            _LOGGER.debug("Closing RTP transport")
             self.transport.close()
             self.transport = None
 
@@ -188,6 +204,10 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Server is ready."""
         self.transport = transport
         self._is_connected = True
+        if self._sender_task is None:
+            _LOGGER.debug("Starting output loop")
+            self._sender_task = self._create_task(self._output_loop())
+            self._sender_task.add_done_callback(self._output_finished)
 
     def datagram_received(self, data, addr):
         """Decode RTP + OPUS into raw audio."""
@@ -234,53 +254,50 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             _LOGGER.debug("No destination address, can't send audio")
             raise ValueError("Destination address not set")
 
-        bytes_per_sample = width * channels
-        bytes_per_frame = self._rtp_output.opus_frame_size * bytes_per_sample
+        # Add silence before actual audio to allow time for the user to pick up the phone.
+        silence_bytes = bytes(int(rate * silence_before) * width * channels)
+        audio_bytes = silence_bytes + audio_bytes
+        _LOGGER.debug("Adding %s bytes of audio to output queue", len(audio_bytes))
 
-        # Generate all RTP packets up front
-        sample_offset = 0
-        samples_left = len(audio_bytes) // bytes_per_sample
-        rtp_packets: list[bytes] = []
-        while samples_left > 0:
-            _LOGGER.debug("Preparing audio chunk to send")
-            bytes_offset = sample_offset * bytes_per_sample
-            chunk = audio_bytes[bytes_offset : bytes_offset + bytes_per_frame]
-            samples_in_chunk = len(chunk) // bytes_per_sample
-            samples_left -= samples_in_chunk
+        self._output_audio_queue.put_nowait(
+            AudioOutputChunk(audio_bytes, rate, width, channels, False)
+        )
 
-            for rtp_bytes in self._rtp_output.process_audio(
-                chunk,
-                rate,
-                width,
-                channels,
-                is_end=samples_left <= 0,
-            ):
-                rtp_packets.append(rtp_bytes)
+    def make_silence_frame(self):
+        """Make a frame of silence to keep RTP alive."""
+        return self._rtp_output.silence_frame()
 
-            sample_offset += samples_in_chunk
+    async def _output_loop(self) -> None:
+        """Handles scheduling audio output."""
+        loop = asyncio.get_running_loop()
+        next_send = loop.time()
+        while self._is_connected:
+            try:
+                audio = self._output_audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            else:
+                _LOGGER.debug("Got audio from output queue")
+                for rtp_bytes in self._rtp_output.process_audio(
+                    audio.data, audio.rate, audio.width, audio.channels, audio.is_end
+                ):
+                    self._rtp_queue.put_nowait(rtp_bytes)
 
-        # Pause before sending to allow time for user to pick up phone.
-        _LOGGER.debug("Pause before sending")
-        time.sleep(silence_before)
+            try:
+                frame = self._rtp_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                frame = self.make_silence_frame()
 
-        # Send RTP in a steady stream, delaying between each packet to simulate real-time audio
-        seconds_per_rtp = self._rtp_output.opus_frame_size / self._rtp_output.opus_rate
-        for rtp_bytes in rtp_packets:
-            if not self._is_connected:
-                break
+            if self.addr is not None and self.transport is not None:
+                self.transport.sendto(frame, self.addr)
 
-            if self.transport is not None:
-                self.transport.sendto(rtp_bytes, addr)
+            # Maintain a fixed 20 ms RTP clock.
+            next_send += 0.020
+            await asyncio.sleep(max(0, next_send - loop.time()))
 
-            # Wait almost the full amount of time for the chunk.
-            #
-            # Sending too fast will cause the phone to skip chunks,
-            # since it doesn't seem to have a very large buffer.
-            #
-            # Sending too slow will cause audio artifacts if there is
-            # network jitter, which is why programs like GStreamer are
-            # much better at this.
-            time.sleep(seconds_per_rtp * sleep_ratio)
+    def _output_finished(self, task: asyncio.Task) -> None:
+        _LOGGER.debug("Clearing sender task")
+        self._sender_task = None
 
 
 class RtcpDatagramProtocol(asyncio.DatagramProtocol, ABC):

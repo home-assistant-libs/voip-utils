@@ -162,6 +162,33 @@ class RtpOpusOutput:
         # Change each time
         self._rtp_ssrc = random.randint(0, 2**32)
 
+    def silence_frame(self) -> bytes:
+        """Create RTP packet for silence frame."""
+        audio_chunk = bytes(self.opus_bytes_per_frame)
+        # Encode to OPUS packet
+        opus_bytes = opuslib.api.encoder.encode(
+            self._encoder,
+            audio_chunk,
+            self.opus_frame_size,
+            4000,  # recommended in opus docs
+        )
+        # Add RTP header
+        # See: https://en.wikipedia.org/wiki/Real-time_Transport_Protocol#Packet_header
+        rtp_bytes = struct.pack(
+            ">BBHLL",
+            self._rtp_flags,
+            self.opus_payload_type,
+            self._rtp_sequence_num,
+            self._rtp_timestamp,
+            self._rtp_ssrc,
+        )
+        # Next frame
+        self._rtp_sequence_num += 1
+        self._rtp_timestamp += self.opus_frame_size
+
+        # RTP packet
+        return rtp_bytes + opus_bytes
+
     def process_audio(
         self,
         audio_bytes: bytes,

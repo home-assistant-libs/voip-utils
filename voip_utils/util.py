@@ -1,4 +1,5 @@
 """Utilities for VoIP"""
+
 from ipaddress import IPv4Address
 
 

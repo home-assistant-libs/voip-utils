@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Move RTP audio output processing to separate task to maintain consistent schedule with silence sent when there is no active audio
+
 ## 0.4.0
 
 - Update to opuslib-next
