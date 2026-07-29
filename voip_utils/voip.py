@@ -4,6 +4,7 @@ import asyncio
 import logging
 import socket
 import struct
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -35,6 +36,13 @@ class AudioOutputChunk:
     width: int
     channels: int
     is_end: bool = False
+    finished: threading.Event | None = None
+
+
+@dataclass
+class RtpFrame:
+    data: bytes
+    finished: threading.Event | None = None
 
 
 class VoipDatagramProtocol(SipDatagramProtocol):
@@ -191,6 +199,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self._sender_task = None
         self._output_audio_queue: asyncio.Queue = asyncio.Queue()
         self._rtp_queue: asyncio.Queue = asyncio.Queue()
+        self._pending_audio_events: set[threading.Event] = set()
         self._is_connected: bool = False
 
     def disconnect(self):
@@ -199,6 +208,10 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             _LOGGER.debug("Closing RTP transport")
             self.transport.close()
             self.transport = None
+        for event in self._pending_audio_events:
+            event.set()
+
+        self._pending_audio_events.clear()
 
     def connection_made(self, transport):
         """Server is ready."""
@@ -259,9 +272,20 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         audio_bytes = silence_bytes + audio_bytes
         _LOGGER.debug("Adding %s bytes of audio to output queue", len(audio_bytes))
 
+        finished = threading.Event()
+        self._pending_audio_events.add(finished)
         self._output_audio_queue.put_nowait(
-            AudioOutputChunk(audio_bytes, rate, width, channels, False)
+            AudioOutputChunk(audio_bytes, rate, width, channels, False, finished)
         )
+        _LOGGER.debug("Audio put_nowait completed")
+        # Set timeout to expected audio time plus a 25% margin
+        _LOGGER.debug("Rate %s, width %s, channels %s", rate, width, channels)
+        timeout = (len(audio_bytes) / (rate * width * channels) + 1) * 1.25
+        _LOGGER.debug("Waiting for audio to play with %s second timeout", timeout)
+        if not finished.wait(timeout):
+            _LOGGER.debug("Voip send audio timed out waiting for audio to play")
+        else:
+            _LOGGER.debug("Voip send audio finished sending")
 
     def make_silence_frame(self):
         """Make a frame of silence to keep RTP alive."""
@@ -278,18 +302,33 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 pass
             else:
                 _LOGGER.debug("Got audio from output queue")
-                for rtp_bytes in self._rtp_output.process_audio(
-                    audio.data, audio.rate, audio.width, audio.channels, audio.is_end
-                ):
-                    self._rtp_queue.put_nowait(rtp_bytes)
+                rtp = list(
+                    self._rtp_output.process_audio(
+                        audio.data,
+                        audio.rate,
+                        audio.width,
+                        audio.channels,
+                        audio.is_end,
+                    )
+                )
+                for index, rtp_bytes in enumerate(rtp):
+                    is_last = index == len(rtp) - 1
+                    if is_last:
+                        self._rtp_queue.put_nowait(RtpFrame(rtp_bytes, audio.finished))
+                    else:
+                        self._rtp_queue.put_nowait(RtpFrame(rtp_bytes))
 
             try:
                 frame = self._rtp_queue.get_nowait()
             except asyncio.QueueEmpty:
-                frame = self.make_silence_frame()
+                frame = RtpFrame(self.make_silence_frame())
 
             if self.addr is not None and self.transport is not None:
-                self.transport.sendto(frame, self.addr)
+                self.transport.sendto(frame.data, self.addr)
+                if frame.finished is not None:
+                    _LOGGER.debug("Finished sending audio")
+                    frame.finished.set()
+                    self._pending_audio_events.discard(frame.finished)
 
             # Maintain a fixed 20 ms RTP clock.
             next_send += 0.020
