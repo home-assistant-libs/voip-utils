@@ -323,7 +323,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             except asyncio.QueueEmpty:
                 frame = RtpFrame(self.make_silence_frame())
 
-            if self.addr is not None and self.transport is not None:
+            if self._is_connected and self.addr is not None and self.transport is not None:
                 self.transport.sendto(frame.data, self.addr)
                 if frame.finished is not None:
                     _LOGGER.debug("Finished sending audio")
