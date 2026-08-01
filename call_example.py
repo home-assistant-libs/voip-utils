@@ -51,6 +51,7 @@ RTP_AUDIO_SETTINGS = {
     "sleep_ratio": 0.99,
 }
 
+
 class ExampleVoipDatagramProtocol(VoipDatagramProtocol):
 
     def __init__(
@@ -63,10 +64,10 @@ class ExampleVoipDatagramProtocol(VoipDatagramProtocol):
         super().__init__(sdp_info, valid_protocol_factory, invalid_protocol_factory)
         self.call_end = asyncio.Event()
 
-
     def on_hangup(self, call_info: CallInfo):
-        """Example implementation of on hangup. """
+        """Example implementation of on hangup."""
         self.call_end.set()
+
 
 class PreRecordMessageProtocol(RtpDatagramProtocol):
     """Plays a pre-recorded message on a loop."""
