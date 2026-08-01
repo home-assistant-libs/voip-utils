@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Callable, Optional, Set
+from typing import Any, Callable, Optional, Set, cast
 
 from .const import OPUS_PAYLOAD_TYPE
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
@@ -59,8 +59,8 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         self.valid_protocol_factory = valid_protocol_factory
         self.invalid_protocol_factory = invalid_protocol_factory
         self._tasks: Set[asyncio.Future[Any]] = set()
-        self._rtp_transport: Optional[asyncio.BaseTransport] = None
-        self._rtcp_transport: Optional[asyncio.BaseTransport] = None
+        self._rtp_protocol: Optional[RtpDatagramProtocol] = None
+        self._rtcp_protocol: Optional[RtcpDatagramProtocol] = None
 
     def is_valid_call(self, call_info: CallInfo) -> bool:
         """Filter calls."""
@@ -131,14 +131,14 @@ class VoipDatagramProtocol(SipDatagramProtocol):
     def on_hangup(self, call_info: CallInfo):
         """Handle the end of a call."""
         _LOGGER.debug("Clean up RTP/RTCP resources on hangup")
-        if self._rtcp_transport:
-            _LOGGER.debug("Shutting down RTCP transport")
-            self._rtcp_transport.close()
-            self._rtcp_transport = None
-        if self._rtp_transport:
-            _LOGGER.debug("Shutting down RTP transport")
-            self._rtp_transport.close()
-            self._rtp_transport = None
+        if self._rtcp_protocol:
+            _LOGGER.debug("Shutting down RTCP protocol")
+            self._rtcp_protocol.disconnect()
+            self._rtcp_protocol = None
+        if self._rtp_protocol:
+            _LOGGER.debug("Shutting down RTP protocol")
+            self._rtp_protocol.disconnect()
+            self._rtp_protocol = None
 
     async def _create_rtp_server(
         self,
@@ -153,16 +153,18 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         loop = asyncio.get_running_loop()
 
         # RTCP server
-        self._rtcp_transport, _ = await loop.create_datagram_endpoint(
+        _, rtcp_protocol = await loop.create_datagram_endpoint(
             lambda: RtcpDatagramProtocol(rtcp_state),
             (rtp_ip, rtp_port + 1),
         )
+        self._rtcp_protocol = cast(RtcpDatagramProtocol, rtcp_protocol)
 
         # RTP server
-        self._rtp_transport, _ = await loop.create_datagram_endpoint(
+        _, rtp_protocol = await loop.create_datagram_endpoint(
             partial(protocol_factory, call_info, rtcp_state),
             (rtp_ip, rtp_port),
         )
+        self._rtp_protocol = cast(RtpDatagramProtocol, rtp_protocol)
 
 
 class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
@@ -327,6 +329,7 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 self._is_connected
                 and self.addr is not None
                 and self.transport is not None
+                and not self.transport.is_closing()
             ):
                 self.transport.sendto(frame.data, self.addr)
                 if frame.finished is not None:
