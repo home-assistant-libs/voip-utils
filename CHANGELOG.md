@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Remove upper limit on python version
+
 ## 0.4.1
 
 - Move RTP audio output processing to separate task to maintain consistent schedule with silence sent when there is no active audio
