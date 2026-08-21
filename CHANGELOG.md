@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- Clear queues on disconnect
+
 ## 0.4.2
 
 - Remove upper limit on python version

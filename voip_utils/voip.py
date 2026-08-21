@@ -213,6 +213,10 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         for event in self._pending_audio_events:
             event.set()
 
+        self._clear_queue(self._audio_queue)
+        self._clear_queue(self._output_audio_queue)
+        self._clear_queue(self._rtp_queue)
+
         self._pending_audio_events.clear()
 
     def connection_made(self, transport):
@@ -342,8 +346,15 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             await asyncio.sleep(max(0, next_send - loop.time()))
 
     def _output_finished(self, task: asyncio.Task) -> None:
+        """Cleanup after output loop completes."""
         _LOGGER.debug("Clearing sender task")
         self._sender_task = None
+
+    @staticmethod
+    def _clear_queue(queue: asyncio.Queue) -> None:
+        """Clear a queue."""
+        while not queue.empty():
+            queue.get_nowait()
 
 
 class RtcpDatagramProtocol(asyncio.DatagramProtocol, ABC):
