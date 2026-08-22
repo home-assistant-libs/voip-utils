@@ -148,19 +148,17 @@ class RtpOpusOutput:
             opuslib.APPLICATION_VOIP,
         )
 
+        # Recommended to start from random offsets to aid encryption (RFC 3550)
+        self._rtp_sequence_num = random.randint(0, 2**10)
+        self._rtp_timestamp = random.randint(1, 2**10)
+        self._rtp_ssrc = random.randint(0, 2**32 - 1)
+
         self.reset()
 
     def reset(self):
         """Clear audio buffer and state."""
         self._audio_buffer = b""
         self._resample_state = None
-
-        # Recommended to start from random offsets to aid encryption
-        self._rtp_sequence_num = random.randint(0, 2**10)
-        self._rtp_timestamp = random.randint(1, 2**10)
-
-        # Change each time
-        self._rtp_ssrc = random.randint(0, 2**32)
 
     def silence_frame(self) -> bytes:
         """Create RTP packet for silence frame."""
@@ -183,8 +181,8 @@ class RtpOpusOutput:
             self._rtp_ssrc,
         )
         # Next frame
-        self._rtp_sequence_num += 1
-        self._rtp_timestamp += self.opus_frame_size
+        self._rtp_sequence_num = (self._rtp_sequence_num + 1) & 0xFFFF
+        self._rtp_timestamp = (self._rtp_timestamp + self.opus_frame_size) & 0xFFFFFFFF
 
         # RTP packet
         return rtp_bytes + opus_bytes
@@ -265,8 +263,10 @@ class RtpOpusOutput:
             yield rtp_bytes + opus_bytes
 
             # Next frame
-            self._rtp_sequence_num += 1
-            self._rtp_timestamp += self.opus_frame_size
+            self._rtp_sequence_num = (self._rtp_sequence_num + 1) & 0xFFFF
+            self._rtp_timestamp = (
+                self._rtp_timestamp + self.opus_frame_size
+            ) & 0xFFFFFFFF
 
         if num_frames > 0:
             # Remove audio already sent
