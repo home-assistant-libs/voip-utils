@@ -210,6 +210,21 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             _LOGGER.debug("Closing RTP transport")
             self.transport.close()
             self.transport = None
+
+        # Fix for https://github.com/home-assistant/core/issues/175718:
+        # cancel a still-running sender task synchronously instead of
+        # relying on it to notice self._is_connected went False on its own
+        # ~20ms loop tick and clear itself via the done-callback later. If a
+        # protocol object is reused across calls (as the VoIP assist
+        # satellite does) and a new call's connection_made() runs before
+        # that done-callback fires, connection_made() sees a stale,
+        # not-yet-None _sender_task and never starts a fresh output loop -
+        # so queued audio is queued forever and every send_audio() call
+        # times out, even though inbound audio keeps working fine.
+        if self._sender_task is not None and not self._sender_task.done():
+            _LOGGER.debug("Cancelling still-running sender task on disconnect")
+            self._sender_task.cancel()
+
         for event in self._pending_audio_events:
             event.set()
 
@@ -223,7 +238,11 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Server is ready."""
         self.transport = transport
         self._is_connected = True
-        if self._sender_task is None:
+        # See the fix note in disconnect() above: also treat an already-
+        # finished (but not yet None) sender task as needing a fresh output
+        # loop, in case disconnect()'s cancellation above raced with this
+        # connection_made() call for a newly reused protocol object.
+        if self._sender_task is None or self._sender_task.done():
             _LOGGER.debug("Starting output loop")
             self._sender_task = self._create_task(self._output_loop())
             self._sender_task.add_done_callback(self._output_finished)
