@@ -166,6 +166,20 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         )
         self._rtp_protocol = cast(RtpDatagramProtocol, rtp_protocol)
 
+        if (
+            call_info.local_rtp_port is not None
+            and call_info.server_ip
+            and call_info.caller_rtp_port
+        ):
+            # For an outgoing call the remote SDP already told us where to send
+            # media, so take the address from there. Otherwise datagram_received()
+            # is the only thing that ever sets it, and we cannot transmit -- not
+            # even the silence frames that keep the RTP stream alive -- until the
+            # remote party sends to us first. A callee that only listens, such as
+            # a PSTN gateway playing a one-way announcement, never does.
+            self._rtp_protocol.addr = (call_info.server_ip, call_info.caller_rtp_port)
+            _LOGGER.debug("Sending RTP to %s", self._rtp_protocol.addr)
+
 
 class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
     """Handle RTP audio input/output for a VoIP call."""
@@ -192,7 +206,9 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
         self.channels = channels
 
         self.transport = None
-        self.addr = None
+        # Destination for outgoing RTP. Matches the "addr" argument of
+        # send_audio(), so it is kept loosely typed.
+        self.addr: Any = None
 
         self._audio_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._rtp_input = RtpOpusInput(opus_payload_type=opus_payload_type)
