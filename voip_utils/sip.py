@@ -453,7 +453,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         response_port = get_response_port(call_info)
         self.transport.sendto(bye_bytes, (response_host, response_port))
 
-        self._end_outgoing_call(call_info.headers["call-id"])
+        self._end_outgoing_call(call_id)
         self.on_hangup(call_info)
 
     def cancel_call(self, call_info: CallInfo):
