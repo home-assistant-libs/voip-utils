@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+- Address SIP responses, ACKs and BYEs using the transport source; `Via` supplies the response port only when its host agrees with that source, per the RFC 3261 "received" rule
+- Ignore responses whose `Call-ID` does not match an INVITE we sent
+- Stop carrying a `Via` host that is not an IPv4 literal into `sendto()`, where it would be resolved on the event loop
+- Drop datagrams whose source is our own listening address
+- Bound the free RTP/RTCP port search, and close the socket opened on each failed attempt; exhaustion now fails one call rather than looping on the event loop
+- Stop answering our own outgoing calls, which made two voip-utils endpoints trade 200 OK and ACK for the length of a call
+- Seed the outgoing RTP destination from the answered SDP, so a callee that only listens still receives audio
+- Require the answered SDP address to be an IPv4 literal
+- `CallInfo` gains `peer_address`, the source address of the datagram a received call arrived on
+- `CallInfo.caller_ip` becomes `caller_uri_host`, since it is the host of the caller's URI rather than an address; `caller_ip` remains as an alias
+
 ## 0.4.3
 
 - Clear queues on disconnect
