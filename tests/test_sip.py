@@ -8,6 +8,7 @@ from voip_utils.sip import (
     SipDatagramProtocol,
     SipEndpoint,
     SipMessage,
+    get_header,
     get_sip_endpoint,
     parse_via_header,
 )
@@ -489,3 +490,230 @@ def test_cancel_via():
         b"CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n",
         ("viahost", 5061),
     )
+
+
+def test_hang_up_ends_outgoing_call():
+    """Hanging up sends a BYE, deregisters the call and notifies on_hangup.
+
+    outgoing_call() records the INVITE headers with their original casing, so
+    hang_up() has to look the Call-ID up case-insensitively.
+    """
+    # pylint: disable=protected-access
+    protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
+    protocol.on_hangup = Mock()
+    transport = Mock()
+    protocol.connection_made(transport)
+
+    source = get_sip_endpoint("testsource")
+    destination = get_sip_endpoint("destination")
+    call_info = protocol.outgoing_call(source, destination, 12345)
+
+    call_id = get_header(call_info.headers, "call-id")[1]
+    assert protocol._get_call_rtp_port(call_id) == 12345
+
+    transport.sendto.reset_mock()
+    protocol.hang_up(call_info)
+
+    bye_lines = [
+        "BYE sip:destination SIP/2.0",
+        "Via: SIP/2.0/UDP testsource:5060",
+        "From: sip:testsource",
+        "To: sip:destination",
+        f"Call-ID: {call_id}",
+        "CSeq: 51 BYE",
+        "User-Agent: voip-utils 1.0",
+        "Content-Length: 0",
+        "",
+    ]
+    transport.sendto.assert_called_once_with(
+        (_CRLF.join(bye_lines) + _CRLF).encode("utf-8"),
+        ("destination", 5060),
+    )
+    assert protocol._get_call_rtp_port(call_id) is None
+    protocol.on_hangup.assert_called_once_with(call_info)
+
+
+class RecordingSipDatagramProtocol(SipDatagramProtocol):
+    """Protocol that records the calls handed to it instead of answering them."""
+
+    def __init__(self, sdp_info: SdpInfo):
+        super().__init__(sdp_info)
+        self.calls: list[CallInfo] = []
+
+    def on_call(self, call_info: CallInfo):
+        self.calls.append(call_info)
+
+
+_PEER = ("192.168.1.50", 5060)
+_LISTENER = ("192.168.1.10", 5060)
+
+
+def _connected_protocol(sockname=("0.0.0.0", 5060)):
+    """Return a protocol with a mock transport bound to the given address."""
+    protocol = RecordingSipDatagramProtocol(
+        SdpInfo("username", 5, "session", "version")
+    )
+    transport = Mock()
+    transport.get_extra_info.return_value = sockname
+    protocol.connection_made(transport)
+    return protocol, transport
+
+
+def _invite(via: str) -> bytes:
+    """Build an INVITE carrying the given Via header value."""
+    invite_lines = [
+        f"INVITE sip:homeassistant@{_LISTENER[0]}:{_LISTENER[1]} SIP/2.0",
+        f"Via: {via}",
+        "From: sip:phone@192.168.1.50",
+        "Contact: sip:phone@192.168.1.50",
+        f"To: sip:homeassistant@{_LISTENER[0]}",
+        "Call-ID: 100",
+        "CSeq: 50 INVITE",
+        "User-Agent: test-agent 1.0",
+        "Content-Type: application/sdp",
+        "Content-Length: 0",
+        "",
+    ]
+    body_lines = [
+        "v=0",
+        "s=Talk",
+        "t=0 0",
+        "m=audio 5004 RTP/AVP 123",
+        "a=rtpmap:123 opus/48000/2",
+        "",
+    ]
+    return (_CRLF.join(invite_lines) + _CRLF + _CRLF.join(body_lines)).encode("utf-8")
+
+
+def test_invite_records_the_transport_source():
+    """The address a call arrived from is carried on CallInfo.
+
+    Headers carry whatever the caller put in them, so this is the only field
+    that records where the call actually came from.
+    """
+    protocol, _ = _connected_protocol()
+
+    protocol.datagram_received(_invite(f"SIP/2.0/UDP {_PEER[0]}:{_PEER[1]}"), _PEER)
+
+    assert len(protocol.calls) == 1
+    assert protocol.calls[0].peer_address == _PEER
+
+
+def test_answer_ignores_via_naming_another_host():
+    """A Via pointing somewhere else does not redirect our response there.
+
+    The transport source is authoritative for where a response goes.
+    """
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(_invite("SIP/2.0/UDP 203.0.113.9:5060"), _PEER)
+    transport.sendto.reset_mock()
+    protocol.answer(protocol.calls[0], 12345)
+
+    transport.sendto.assert_called_once()
+    assert transport.sendto.call_args[0][1] == _PEER
+
+
+def test_answer_ignores_via_naming_the_listener():
+    """A Via naming us does not make us answer ourselves."""
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(
+        _invite(f"SIP/2.0/UDP {_LISTENER[0]}:{_LISTENER[1]}"), _PEER
+    )
+    transport.sendto.reset_mock()
+    protocol.answer(protocol.calls[0], 12345)
+
+    transport.sendto.assert_called_once()
+    assert transport.sendto.call_args[0][1] == _PEER
+
+
+def test_via_hostname_never_reaches_sendto():
+    """A Via host that is not an IP literal is discarded, not resolved.
+
+    Passing a name to sendto() would resolve it on the event loop.
+    """
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(_invite("SIP/2.0/UDP proxy.example.com:5060"), _PEER)
+    transport.sendto.reset_mock()
+    protocol.answer(protocol.calls[0], 12345)
+
+    assert protocol.calls[0].via_host != "proxy.example.com"
+    transport.sendto.assert_called_once()
+    assert transport.sendto.call_args[0][1] == _PEER
+
+
+def test_answer_honours_via_port_from_the_caller():
+    """A Via whose host agrees with the source still chooses the port.
+
+    This is the RFC 3261 "received" rule, and phones that send from an ephemeral
+    port rely on it.
+    """
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(_invite(f"SIP/2.0/UDP {_PEER[0]}:5070"), _PEER)
+    transport.sendto.reset_mock()
+    protocol.answer(protocol.calls[0], 12345)
+
+    assert transport.sendto.call_args[0][1] == (_PEER[0], 5070)
+
+
+def _ok_response(call_id: str) -> bytes:
+    ok_lines = [
+        "SIP/2.0 200 OK",
+        f"Via: SIP/2.0/UDP {_PEER[0]}:{_PEER[1]}",
+        "From: sip:homeassistant@192.168.1.10",
+        "To: sip:phone@192.168.1.50",
+        f"Call-ID: {call_id}",
+        "CSeq: 50 INVITE",
+        "Content-Type: application/sdp",
+        "Content-Length: 0",
+        "",
+    ]
+    body_lines = [
+        "v=0",
+        "c=IN IP4 192.168.1.50",
+        "t=0 0",
+        "m=audio 5004 RTP/AVP 123",
+        "a=rtpmap:123 opus/48000/2",
+        "",
+    ]
+    return (_CRLF.join(ok_lines) + _CRLF + _CRLF.join(body_lines)).encode("utf-8")
+
+
+def test_ok_for_unknown_call_id_is_ignored():
+    """An unsolicited 200 OK does not start a call.
+
+    Only a response matching an INVITE we sent corresponds to a call.
+    """
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(_ok_response("not-a-call-we-made"), _PEER)
+
+    assert not protocol.calls
+    transport.sendto.assert_not_called()
+
+
+def test_ok_for_known_call_id_is_handled():
+    """A 200 OK for a call we placed still goes through."""
+    # pylint: disable=protected-access
+    protocol, _ = _connected_protocol()
+    protocol._register_outgoing_call("100", 12345)
+
+    protocol.datagram_received(_ok_response("100"), _PEER)
+
+    assert len(protocol.calls) == 1
+    assert protocol.calls[0].peer_address == _PEER
+
+
+def test_datagram_from_our_own_address_is_dropped():
+    """A datagram whose source is our own listening address is not a call."""
+    protocol, transport = _connected_protocol(sockname=_LISTENER)
+
+    protocol.datagram_received(
+        _invite(f"SIP/2.0/UDP {_LISTENER[0]}:{_LISTENER[1]}"), _LISTENER
+    )
+
+    assert not protocol.calls
+    transport.sendto.assert_not_called()

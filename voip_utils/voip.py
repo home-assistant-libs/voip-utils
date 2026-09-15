@@ -12,11 +12,15 @@ from functools import partial
 from typing import Any, Callable, Optional, Set, cast
 
 from .const import OPUS_PAYLOAD_TYPE
+from .error import RtpError, VoipError
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
 
 _LOGGER = logging.getLogger(__name__)
 _RTCP_BYE = 203
+
+# Consecutive RTP/RTCP port pairs to try before giving up on a call.
+_RTP_PORT_ATTEMPTS = 100
 
 
 @dataclass
@@ -82,7 +86,10 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             # Find free RTP/RTCP ports
             rtp_port = 0
 
-            while True:
+            # Bounded: this runs on the event loop, so an unbounded search
+            # under port pressure would stall every other call rather than
+            # failing just this one.
+            for _ in range(_RTP_PORT_ATTEMPTS):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.setblocking(False)
 
@@ -105,7 +112,12 @@ class VoipDatagramProtocol(SipDatagramProtocol):
                     break
                 except OSError:
                     # RTCP port is taken
-                    pass
+                    sock.close()
+            else:
+                raise VoipError(
+                    "No free RTP/RTCP port pair found after "
+                    f"{_RTP_PORT_ATTEMPTS} attempts"
+                )
 
         else:
             rtp_ip = call_info.local_rtp_ip if call_info.local_rtp_ip else ""
@@ -280,6 +292,11 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             )
 
             self.on_chunk(audio_bytes)
+        except RtpError:
+            # Drop packets we can't decode instead of ending the call. Our own
+            # SDP offers telephone-event payload types alongside OPUS, so a
+            # phone sending DTMF is expected rather than exceptional.
+            _LOGGER.debug("Ignoring RTP packet from %s", addr, exc_info=True)
         except Exception as err:
             self.disconnect()
             raise err

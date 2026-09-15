@@ -191,6 +191,8 @@ class CallInfo:
     contact_endpoint: SipEndpoint | None = None
     via_host: str | None = None
     via_port: int | None = None
+    # Source address of the datagram this call arrived on. None for calls we placed.
+    peer_address: Tuple[str, int] | None = None
 
     @property
     def caller_rtcp_port(self) -> int:
@@ -198,9 +200,18 @@ class CallInfo:
         return self.caller_rtp_port + 1
 
     @property
-    def caller_ip(self) -> str:
-        """Get IP address of caller."""
+    def caller_uri_host(self) -> str:
+        """Get the host part of the caller's SIP URI.
+
+        This is the URI the caller presented, which need not match the address
+        the call arrived from. Use peer_address for that.
+        """
         return self.caller_endpoint.host
+
+    @property
+    def caller_ip(self) -> str:
+        """Deprecated alias of caller_uri_host, which is not an address."""
+        return self.caller_uri_host
 
     @property
     def caller_sip_port(self) -> int:
@@ -281,22 +292,51 @@ def parse_via_header(value: str) -> Optional[Tuple[str, int]]:
     return host, port
 
 
-def get_response_host(call_info: CallInfo) -> str:
-    if call_info.via_host:
-        return call_info.via_host
-    if call_info.contact_host:
-        return call_info.contact_host
+def parse_incoming_via(
+    headers: dict[str, str], fallback: SipEndpoint
+) -> Tuple[str, int]:
+    """Parse the Via of a received message, falling back to the contact endpoint.
 
-    return call_info.caller_ip
+    A Via host that is not an IP literal is discarded rather than carried: a name
+    handed to sendto() would be resolved on the event loop.
+    """
+    via_header = headers.get("via")
+    if via_header is not None and (via_result := parse_via_header(via_header)):
+        via_host, via_port = via_result
+        if is_ipv4_address(via_host):
+            return via_host, via_port
+        _LOGGER.debug("Ignoring Via host that is not an IPv4 address: %s", via_host)
+    return fallback.host, fallback.port
+
+
+def get_response_address(call_info: CallInfo) -> Tuple[str, int]:
+    """Get the address a response to this call should be sent to.
+
+    For a received call the transport source is authoritative: Via and Contact
+    carry whatever the sender put in them, which need not be reachable or even
+    correct. Via contributes only its port, and only when its host agrees with
+    where the datagram came from, following the RFC 3261 "received" rule.
+    """
+    if call_info.peer_address is not None:
+        peer_host, peer_port = call_info.peer_address
+        if call_info.via_port and call_info.via_host == peer_host:
+            return peer_host, call_info.via_port
+        return peer_host, peer_port
+
+    # A call we placed: the destination came from configuration rather than from
+    # the network, and no datagram has been received against it yet.
+    return (
+        call_info.via_host or call_info.contact_host or call_info.caller_uri_host,
+        call_info.via_port or call_info.contact_port or call_info.caller_sip_port,
+    )
+
+
+def get_response_host(call_info: CallInfo) -> str:
+    return get_response_address(call_info)[0]
 
 
 def get_response_port(call_info: CallInfo) -> int:
-    if call_info.via_port:
-        return call_info.via_port
-    if call_info.contact_port:
-        return call_info.contact_port
-
-    return call_info.caller_sip_port
+    return get_response_address(call_info)[1]
 
 
 def get_rtp_info(body: str) -> RtpInfo:
@@ -449,11 +489,9 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         _LOGGER.debug("Hanging up...")
         bye_text = _CRLF.join(bye_lines) + _CRLF
         bye_bytes = bye_text.encode("utf-8")
-        response_host = get_response_host(call_info)
-        response_port = get_response_port(call_info)
-        self.transport.sendto(bye_bytes, (response_host, response_port))
+        self.transport.sendto(bye_bytes, get_response_address(call_info))
 
-        self._end_outgoing_call(call_info.headers["call-id"])
+        self._end_outgoing_call(call_id)
         self.on_hangup(call_info)
 
     def cancel_call(self, call_info: CallInfo):
@@ -486,13 +524,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         cancel_text = _CRLF.join(cancel_lines) + _CRLF
         cancel_bytes = cancel_text.encode("utf-8")
 
-        response_host = get_response_host(call_info)
-        response_port = get_response_port(call_info)
-
-        self.transport.sendto(
-            cancel_bytes,
-            (response_host, response_port),
-        )
+        self.transport.sendto(cancel_bytes, get_response_address(call_info))
 
         self._end_outgoing_call(get_header(call_info.headers, "call-id")[1])
         self.on_hangup(call_info)
@@ -513,6 +545,21 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         """Server ready."""
         self.transport = transport
 
+    def _is_own_address(self, addr) -> bool:
+        """Return whether a datagram source is the address we listen on.
+
+        Responding to one would put the server in a message loop with itself.
+        Only an exact match is caught here: bound to a wildcard we cannot tell
+        our own interface addresses apart from a peer's, so callers that can
+        enumerate them should check as well.
+        """
+        if self.transport is None:
+            return False
+        sockname = self.transport.get_extra_info("sockname")
+        if not sockname or sockname[0] in ("", "0.0.0.0", "::"):
+            return False
+        return tuple(sockname[:2]) == tuple(addr[:2])
+
     def datagram_received(self, data: bytes, addr):
         """Handle INVITE SIP messages."""
         try:
@@ -521,6 +568,10 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                 return
 
             caller_ip, caller_sip_port = addr
+            if self._is_own_address(addr):
+                _LOGGER.warning("Dropping SIP message from our own address: %s", addr)
+                return
+
             message = data.decode("utf-8")
             smsg = SipMessage.parse_sip(message)
             _LOGGER.debug(
@@ -562,14 +613,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     contact_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
                 # We need to get the URI needed for sending replies to the device from the Via header
-                if smsg.headers.get("via") is not None and (
-                    via_result := parse_via_header(smsg.headers.get("via"))
-                ):
-                    via_host, via_port = via_result
-                # If all else fails use the Contact header, which may have been generated based on the IP and port the message came from
-                else:
-                    via_host = contact_endpoint.host
-                    via_port = contact_endpoint.port
+                via_host, via_port = parse_incoming_via(smsg.headers, contact_endpoint)
 
                 local_endpoint = None
                 if smsg.headers.get("to") is not None:
@@ -642,11 +686,23 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         contact_endpoint=contact_endpoint,
                         via_host=via_host,
                         via_port=via_port,
+                        peer_address=addr,
                     )
                 )
             elif method is None:
-                # Reply message means we must have received a response to someone we called
-                # TODO: Verify that the call / sequence IDs match our outgoing INVITE
+                # A response belongs to a call we placed. Anything else is
+                # unsolicited, and acting on it would start a call that no
+                # outgoing INVITE of ours corresponds to.
+                response_call_id = smsg.headers.get("call-id")
+                if (
+                    response_call_id is None
+                    or self._get_call_rtp_port(response_call_id) is None
+                ):
+                    _LOGGER.debug(
+                        "Ignoring response for unknown call-id [%s]", response_call_id
+                    )
+                    return
+
                 _LOGGER.debug("Received response [%s]", message)
                 is_ok = smsg.code == "200" and smsg.reason == "OK"
                 if smsg.code == "487":
@@ -672,13 +728,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     ]
                     ack_text = _CRLF.join(ack_lines) + _CRLF
                     ack_bytes = ack_text.encode("utf-8")
-                    via_result = parse_via_header(smsg.headers["via"])
-                    if via_result:
-                        response_host, response_port = via_result
-                    else:
-                        response_host = caller_ip
-                        response_port = caller_sip_port
-                    self.transport.sendto(ack_bytes, (response_host, response_port))
+                    self.transport.sendto(ack_bytes, addr)
                     return
                 if not is_ok:
                     _LOGGER.debug("Received non-OK response [%s]", message)
@@ -734,6 +784,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         opus_payload_type=opus_payload_type,  # Should probably update this to eventually support more codecs
                         local_rtp_ip=local_endpoint.host,
                         local_rtp_port=local_rtp_port,
+                        peer_address=addr,
                     )
                 )
             elif method == "bye":
@@ -761,14 +812,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     contact_endpoint = get_sip_endpoint(caller_ip, port=caller_sip_port)
 
                 # We need to get the URI needed for sending replies to the device from the Via header
-                if smsg.headers.get("via") is not None and (
-                    via_result := parse_via_header(smsg.headers.get("via"))
-                ):
-                    via_host, via_port = via_result
-                # If all else fails use the Contact header, which may have been generated based on the IP and port the message came from
-                else:
-                    via_host = contact_endpoint.host
-                    via_port = contact_endpoint.port
+                via_host, via_port = parse_incoming_via(smsg.headers, contact_endpoint)
 
                 local_endpoint = None
                 if smsg.headers.get("to") is not None:
@@ -808,15 +852,11 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                     contact_endpoint=contact_endpoint,
                     via_host=via_host,
                     via_port=via_port,
+                    peer_address=addr,
                 )
                 # We should probably tell the associated RTP server to shutdown at this point, assuming we aren't reusing it for other calls
                 _LOGGER.debug("Sending OK for BYE message: %s", ok_text)
-                response_host = get_response_host(call_info)
-                response_port = get_response_port(call_info)
-                self.transport.sendto(
-                    ok_bytes,
-                    (response_host, response_port),
-                )
+                self.transport.sendto(ok_bytes, get_response_address(call_info))
                 # The transport might be used for incoming calls
                 # as well, so we should leave it open.
 
@@ -908,8 +948,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
         response_str = _CRLF.join(response_lines) + body
         response_bytes = response_str.encode()
 
-        response_host = get_response_host(call_info)
-        response_port = get_response_port(call_info)
+        response_host, response_port = get_response_address(call_info)
 
         self.transport.sendto(
             response_bytes,
