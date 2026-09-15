@@ -195,3 +195,16 @@ def test_rtp_allocator_gives_up_instead_of_spinning():
 
     # Two binds per attempt: the RTP port, then the RTCP port above it.
     assert _NoFreePairSocket.binds == _RTP_PORT_ATTEMPTS * 2
+
+
+def test_outgoing_call_rtp_address_must_be_an_ip_literal():
+    """A c= line that is not an IPv4 literal is not used as an RTP destination.
+
+    server_ip comes from the SDP of whoever answered, so it need not be an
+    address at all. Handing a name to sendto() would resolve it on the event
+    loop.
+    """
+    call_info = _call_info(local_rtp_port=23456)
+    call_info.server_ip = "proxy.example.com"
+
+    assert _rtp_address(call_info) is None

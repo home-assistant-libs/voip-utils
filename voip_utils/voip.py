@@ -15,6 +15,7 @@ from .const import OPUS_PAYLOAD_TYPE
 from .error import RtpError, VoipError
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
+from .util import is_ipv4_address
 
 _LOGGER = logging.getLogger(__name__)
 _RTCP_BYE = 203
@@ -181,6 +182,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         if (
             call_info.local_rtp_port is not None
             and call_info.server_ip
+            and is_ipv4_address(call_info.server_ip)
             and call_info.caller_rtp_port
         ):
             # For an outgoing call the remote SDP already told us where to send
