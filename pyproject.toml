@@ -38,6 +38,7 @@ dev = [
     "opuslib-next==1.1.6",
     "pylint==3.2.5",
     "pytest==8.3.4",
+    "pytest-asyncio==0.25.3",
     "python-dotenv==1.0.1"
 ]
 
@@ -94,3 +95,4 @@ expected-line-ending-format = "LF"
 testpaths = [
     "tests",
 ]
+asyncio_default_fixture_loop_scope = "function"
