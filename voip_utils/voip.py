@@ -82,6 +82,10 @@ class VoipDatagramProtocol(SipDatagramProtocol):
             _LOGGER.debug("Call rejected: %s", call_info)
             return
 
+        # An outgoing call we placed already carries the RTP port we advertised
+        # in our INVITE, and the remote party is the one that answered it.
+        is_outgoing_call = call_info.local_rtp_port is not None
+
         rtp_ip = ""
         if call_info.local_rtp_port is None:
             # Find free RTP/RTCP ports
@@ -138,8 +142,12 @@ class VoipDatagramProtocol(SipDatagramProtocol):
         self._tasks.add(rtp_task)
         rtp_task.add_done_callback(self._tasks.remove)
 
-        # Tell caller to start sending/receiving RTP audio
-        self.answer(call_info, rtp_port)
+        if not is_outgoing_call:
+            # Tell caller to start sending/receiving RTP audio.
+            # Only incoming calls are answered here: replying to our own
+            # outgoing call with a 200 OK would restart the INVITE exchange at
+            # the remote end.
+            self.answer(call_info, rtp_port)
 
     def on_hangup(self, call_info: CallInfo):
         """Handle the end of a call."""
