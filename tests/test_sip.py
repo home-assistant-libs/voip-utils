@@ -8,6 +8,7 @@ from voip_utils.sip import (
     SipDatagramProtocol,
     SipEndpoint,
     SipMessage,
+    get_header,
     get_sip_endpoint,
     parse_via_header,
 )
@@ -489,3 +490,44 @@ def test_cancel_via():
         b"CANCEL sip:destination SIP/2.0\r\nVia: SIP/2.0/UDP testsource:5060\r\nFrom: sip:testsource\r\nTo: sip:destination\r\nCall-ID: 100\r\nCSeq: 50 CANCEL\r\nUser-Agent: voip-utils 1.0\r\nContent-Length: 0\r\n\r\n",
         ("viahost", 5061),
     )
+
+
+def test_hang_up_ends_outgoing_call():
+    """Hanging up sends a BYE, deregisters the call and notifies on_hangup.
+
+    outgoing_call() records the INVITE headers with their original casing, so
+    hang_up() has to look the Call-ID up case-insensitively.
+    """
+    # pylint: disable=protected-access
+    protocol = MockSipDatagramProtocol(SdpInfo("username", 5, "session", "version"))
+    protocol.on_hangup = Mock()
+    transport = Mock()
+    protocol.connection_made(transport)
+
+    source = get_sip_endpoint("testsource")
+    destination = get_sip_endpoint("destination")
+    call_info = protocol.outgoing_call(source, destination, 12345)
+
+    call_id = get_header(call_info.headers, "call-id")[1]
+    assert protocol._get_call_rtp_port(call_id) == 12345
+
+    transport.sendto.reset_mock()
+    protocol.hang_up(call_info)
+
+    bye_lines = [
+        "BYE sip:destination SIP/2.0",
+        "Via: SIP/2.0/UDP testsource:5060",
+        "From: sip:testsource",
+        "To: sip:destination",
+        f"Call-ID: {call_id}",
+        "CSeq: 51 BYE",
+        "User-Agent: voip-utils 1.0",
+        "Content-Length: 0",
+        "",
+    ]
+    transport.sendto.assert_called_once_with(
+        (_CRLF.join(bye_lines) + _CRLF).encode("utf-8"),
+        ("destination", 5060),
+    )
+    assert protocol._get_call_rtp_port(call_id) is None
+    protocol.on_hangup.assert_called_once_with(call_info)

@@ -12,6 +12,7 @@ from functools import partial
 from typing import Any, Callable, Optional, Set, cast
 
 from .const import OPUS_PAYLOAD_TYPE
+from .error import RtpError
 from .rtp_audio import RtpOpusInput, RtpOpusOutput
 from .sip import CallInfo, SdpInfo, SipDatagramProtocol
 
@@ -272,6 +273,11 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             )
 
             self.on_chunk(audio_bytes)
+        except RtpError:
+            # Drop packets we can't decode instead of ending the call. Our own
+            # SDP offers telephone-event payload types alongside OPUS, so a
+            # phone sending DTMF is expected rather than exceptional.
+            _LOGGER.debug("Ignoring RTP packet from %s", addr, exc_info=True)
         except Exception as err:
             self.disconnect()
             raise err

@@ -1,17 +1,46 @@
 """Test voip_utils VoIP functionality."""
 
 import asyncio
+import struct
 from unittest.mock import AsyncMock, Mock
 
 from voip_utils.sip import CallInfo, SdpInfo, get_sip_endpoint
-from voip_utils.voip import VoipDatagramProtocol
+from voip_utils.voip import RtpDatagramProtocol, VoipDatagramProtocol
+
+
+def _no_task(coro):
+    """Stand in for asyncio.create_task, which needs a running event loop."""
+    coro.close()
+    return Mock()
+
+
+class MockRtpDatagramProtocol(RtpDatagramProtocol):
+    def __init__(self):
+        super().__init__(opus_payload_type=123, create_task=_no_task)
+        self.chunks = []
+
+    def on_chunk(self, audio_bytes: bytes) -> None:
+        self.chunks.append(audio_bytes)
+
+
+class NullRtpDatagramProtocol(RtpDatagramProtocol):
+    """RTP protocol that discards what it receives.
+
+    Unlike MockRtpDatagramProtocol this one is driven by a real event loop, so
+    it keeps the stock create_task.
+    """
+
+    def on_chunk(self, audio_bytes: bytes) -> None:
+        pass
 
 
 class MockVoipDatagramProtocol(VoipDatagramProtocol):
     def __init__(self):
         super().__init__(
             SdpInfo("username", 5, "session", "version"),
-            lambda call_info, rtcp_state: Mock(),
+            lambda call_info, rtcp_state: NullRtpDatagramProtocol(
+                rtcp_state=rtcp_state
+            ),
         )
 
 
@@ -22,7 +51,8 @@ def _call_info(local_rtp_port=None):
         caller_endpoint=destination,
         local_endpoint=source,
         caller_rtp_port=12345,
-        server_ip=destination.host,
+        # On the outgoing path this is the address from the remote SDP "c=" line
+        server_ip="192.0.2.10",
         headers={
             "via": f"SIP/2.0/UDP {source.host}:{source.port}",
             "from": source.sip_header,
@@ -31,9 +61,33 @@ def _call_info(local_rtp_port=None):
             "call-id": "100",
             "cseq": "50 INVITE",
         },
-        local_rtp_ip=source.host if local_rtp_port else None,
+        local_rtp_ip="127.0.0.1" if local_rtp_port else None,
         local_rtp_port=local_rtp_port,
     )
+
+
+def _rtp_packet(payload_type: int, payload: bytes = b"\x00\x00\x00\x00") -> bytes:
+    flags = 0b10000000  # version 2, no padding or extensions
+    return struct.pack(">BBHLL", flags, payload_type, 1, 0, 0) + payload
+
+
+def test_unknown_payload_type_does_not_end_the_call():
+    """A payload type we don't handle is dropped, not treated as fatal.
+
+    outgoing_call() offers telephone-event payload types in its SDP, so a phone
+    is entitled to send DTMF mid-call. Tearing the call down in response would
+    hang up on the user for pressing a key.
+    """
+    protocol = MockRtpDatagramProtocol()
+    transport = Mock()
+    transport.is_closing.return_value = False
+    protocol.connection_made(transport)
+
+    # 101 is the telephone-event payload type offered by outgoing_call().
+    protocol.datagram_received(_rtp_packet(101), ("127.0.0.1", 5004))
+
+    assert not protocol.chunks
+    transport.close.assert_not_called()
 
 
 def _on_call(call_info):
