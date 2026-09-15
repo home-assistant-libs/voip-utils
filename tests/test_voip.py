@@ -1,6 +1,7 @@
 """Test voip_utils VoIP functionality."""
 
 import asyncio
+import socket
 import struct
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -97,6 +98,37 @@ def test_unknown_payload_type_does_not_end_the_call():
     transport.close.assert_not_called()
 
 
+def _free_port_pair() -> int:
+    """Find a free port whose neighbour is free too, for RTP and RTCP."""
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.bind(("127.0.0.1", port + 1))
+        except OSError:
+            continue
+        return port
+
+
+def _rtp_address(call_info):
+    """Start an RTP server for call_info and return the protocol's address."""
+
+    async def run():
+        protocol = MockVoipDatagramProtocol()
+        await protocol._create_rtp_server(  # pylint: disable=protected-access
+            protocol.valid_protocol_factory, call_info, "127.0.0.1", _free_port_pair()
+        )
+        rtp_protocol = protocol._rtp_protocol  # pylint: disable=protected-access
+        addr = rtp_protocol.addr
+        rtp_protocol.disconnect()
+        protocol._rtcp_protocol.disconnect()  # pylint: disable=protected-access
+        return addr
+
+    return asyncio.run(run())
+
+
 def _on_call(call_info):
     """Run on_call() with the RTP server stubbed out, return the answer mock."""
 
@@ -113,6 +145,23 @@ def _on_call(call_info):
         return protocol.answer
 
     return asyncio.run(run())
+
+
+def test_outgoing_call_rtp_address_comes_from_sdp():
+    """An answered outgoing call knows where to send media straight away.
+
+    Otherwise nothing is transmitted until the remote party sends to us first,
+    which a listen-only callee never does.
+    """
+    assert _rtp_address(_call_info(local_rtp_port=23456)) == ("192.0.2.10", 12345)
+
+
+def test_incoming_call_rtp_address_is_learned_from_traffic():
+    """An incoming call still learns the address from the first packet.
+
+    server_ip is our own address on that path, not the caller's.
+    """
+    assert _rtp_address(_call_info()) is None
 
 
 def test_incoming_call_is_answered():
@@ -184,3 +233,16 @@ def test_rtp_allocator_gives_up_instead_of_spinning():
 
     # Two binds per attempt: the RTP port, then the RTCP port above it.
     assert _NoFreePairSocket.binds == _RTP_PORT_ATTEMPTS * 2
+
+
+def test_outgoing_call_rtp_address_must_be_an_ip_literal():
+    """A c= line that is not an IPv4 literal is not used as an RTP destination.
+
+    server_ip comes from the SDP of whoever answered, so it need not be an
+    address at all. Handing a name to sendto() would resolve it on the event
+    loop.
+    """
+    call_info = _call_info(local_rtp_port=23456)
+    call_info.server_ip = "proxy.example.com"
+
+    assert _rtp_address(call_info) is None
