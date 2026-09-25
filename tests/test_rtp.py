@@ -1,7 +1,6 @@
 """Test voip_utils RTP functionality."""
 
 import os
-from unittest.mock import Mock
 
 from voip_utils.rtp_audio import RtpOpusOutput
 
@@ -14,6 +13,7 @@ def test_opus_output():
     assert rtpout.opus_frame_size == 960
 
 
+# pylint: disable=protected-access
 def test_sequence_number_wrap_silence():
     rtpout = RtpOpusOutput()
     rtpout._rtp_sequence_num = 65535
@@ -21,6 +21,7 @@ def test_sequence_number_wrap_silence():
     assert rtpout._rtp_sequence_num == 0
 
 
+# pylint: disable=protected-access
 def test_sequence_number_wrap_audio():
     rtpout = RtpOpusOutput()
     rtpout._rtp_sequence_num = 65535
