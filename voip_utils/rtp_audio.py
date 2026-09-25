@@ -183,7 +183,7 @@ class RtpOpusOutput:
             self._rtp_ssrc,
         )
         # Next frame
-        self._rtp_sequence_num += 1
+        self._rtp_sequence_num = (self._rtp_sequence_num + 1) & 0xFFFF
         self._rtp_timestamp += self.opus_frame_size
 
         # RTP packet
@@ -265,7 +265,7 @@ class RtpOpusOutput:
             yield rtp_bytes + opus_bytes
 
             # Next frame
-            self._rtp_sequence_num += 1
+            self._rtp_sequence_num = (self._rtp_sequence_num + 1) & 0xFFFF
             self._rtp_timestamp += self.opus_frame_size
 
         if num_frames > 0:
