@@ -1,5 +1,7 @@
 """Tests for rtp_audio."""
 
+# pylint: disable=protected-access
+
 import struct
 
 from voip_utils.rtp_audio import RtpOpusOutput
