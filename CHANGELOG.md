@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Fix SSRC and timestamp resets across audio chunks and resets
+
 ## 0.5.0
 
 - Address SIP responses, ACKs and BYEs using the transport source; `Via` supplies the response port only when its host agrees with that source, per the RFC 3261 "received" rule
