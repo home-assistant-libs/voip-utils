@@ -5,6 +5,7 @@ import socket
 import struct
 from unittest.mock import AsyncMock, Mock, patch
 
+import opuslib_next as opuslib
 import pytest
 
 from voip_utils.error import VoipError
@@ -246,3 +247,50 @@ def test_outgoing_call_rtp_address_must_be_an_ip_literal():
     call_info.server_ip = "proxy.example.com"
 
     assert _rtp_address(call_info) is None
+
+
+async def _sent_channels(sock: socket.socket) -> int:
+    """Read one RTP packet from a socket, return its OPUS channel count."""
+    loop = asyncio.get_running_loop()
+    packet = await asyncio.wait_for(loop.sock_recv(sock, 4096), 5)
+    return opuslib.api.decoder.packet_get_nb_channels(packet[12:])
+
+
+def test_channels_are_set_per_call_on_a_reused_protocol():
+    """Each call's first frame on the wire uses that call's channel count.
+
+    Home Assistant hands the same protocol object to every call of a device.
+    """
+
+    async def run():
+        # pylint: disable=protected-access
+        rtp_protocol = NullRtpDatagramProtocol()
+        voip_protocol = VoipDatagramProtocol(
+            SdpInfo("username", 5, "session", "version"),
+            lambda call_info, rtcp_state: rtp_protocol,
+        )
+
+        sent = []
+        # None is a call we placed, which keeps the CallInfo default
+        for channels in (1, 2, 1, None):
+            call_info = _call_info()
+            if channels is not None:
+                call_info.opus_channels = channels
+
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
+                receiver.setblocking(False)
+                receiver.bind(("127.0.0.1", 0))
+                rtp_protocol.addr = receiver.getsockname()
+
+                await voip_protocol._create_rtp_server(
+                    voip_protocol.valid_protocol_factory,
+                    call_info,
+                    "127.0.0.1",
+                    _free_port_pair(),
+                )
+                sent.append(await _sent_channels(receiver))
+                voip_protocol.on_hangup(call_info)
+
+        return sent
+
+    assert asyncio.run(run()) == [1, 2, 1, 2]

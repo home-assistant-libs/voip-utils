@@ -137,6 +137,19 @@ class RtpOpusOutput:
         self,
     ) -> None:
         """Initialize encoder and state."""
+        self.set_channels(self.opus_channels)
+
+        # Recommended to start from random offsets to aid encryption (RFC 3550)
+        self._rtp_sequence_num = random.randint(0, 2**10)
+        self._rtp_timestamp = random.randint(1, 2**10)
+        self._rtp_ssrc = random.randint(0, 2**32 - 1)
+
+    def set_channels(self, channels: int) -> None:
+        """Create the encoder for a channel count, keeping the RTP stream state."""
+        if channels not in (1, 2):
+            raise ValueError("Only mono and stereo audio is supported")
+
+        self.opus_channels = channels
         self.opus_bytes_per_frame = (
             self.opus_frame_size * self.opus_width * self.opus_channels
         )
@@ -144,15 +157,11 @@ class RtpOpusOutput:
         # Set up OPUS encoder for VoIP
         self._encoder = opuslib.api.encoder.create_state(
             self.opus_rate,
-            self.opus_width,
+            self.opus_channels,
             opuslib.APPLICATION_VOIP,
         )
 
-        # Recommended to start from random offsets to aid encryption (RFC 3550)
-        self._rtp_sequence_num = random.randint(0, 2**10)
-        self._rtp_timestamp = random.randint(1, 2**10)
-        self._rtp_ssrc = random.randint(0, 2**32 - 1)
-
+        # Buffered audio has the layout of the previous channel count
         self.reset()
 
     def reset(self):
@@ -216,13 +225,22 @@ class RtpOpusOutput:
             )
 
         if channels != self.opus_channels:
-            # Convert to stereo
-            audio_bytes = audioop.tostereo(
-                audio_bytes,
-                self.opus_width,
-                1.0,
-                1.0,
-            )
+            if self.opus_channels == 2:
+                # Convert to stereo
+                audio_bytes = audioop.tostereo(
+                    audio_bytes,
+                    self.opus_width,
+                    1.0,
+                    1.0,
+                )
+            else:
+                # Convert to mono
+                audio_bytes = audioop.tomono(
+                    audio_bytes,
+                    self.opus_width,
+                    0.5,
+                    0.5,
+                )
 
         self._audio_buffer += audio_bytes
         if is_end:

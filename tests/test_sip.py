@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from voip_utils.sip import (
     CallInfo,
     SdpInfo,
@@ -9,6 +11,7 @@ from voip_utils.sip import (
     SipEndpoint,
     SipMessage,
     get_header,
+    get_opus_channels,
     get_sip_endpoint,
     parse_via_header,
 )
@@ -717,3 +720,118 @@ def test_datagram_from_our_own_address_is_dropped():
 
     assert not protocol.calls
     transport.sendto.assert_not_called()
+
+
+_POLY_FMTP = (
+    "a=fmtp:121 maxplaybackrate=16000; sprop-maxcapturerate=16000; maxptime=20; "
+    "ptime=20; maxaveragebitrate=24000; cbr=0; useinbandfec=0; usedtx=0"
+)
+
+
+@pytest.mark.parametrize(
+    ("fmtp_lines", "channels"),
+    [
+        # Absent means the RFC 7587 default, which is mono
+        ([], 1),
+        (["a=fmtp:121"], 1),
+        (["a=fmtp:121 useinbandfec=0"], 1),
+        ([_POLY_FMTP], 1),
+        # Explicit values
+        (["a=fmtp:121 stereo=0"], 1),
+        (["a=fmtp:121 stereo=1"], 2),
+        ([_POLY_FMTP + "; stereo=1"], 2),
+        (["a=fmtp:121 usedtx=0;stereo=1;cbr=0"], 2),
+        (["a=fmtp:121 STEREO=1"], 2),
+        # Malformed values
+        (["a=fmtp:121 stereo"], 1),
+        (["a=fmtp:121 stereo="], 1),
+        (["a=fmtp:121 stereo=2"], 1),
+        (["a=fmtp:121 stereo=yes"], 1),
+        (["a=fmtp:121 stereo=1x"], 1),
+        # Says what the caller sends, not what it wants to receive
+        (["a=fmtp:121 sprop-stereo=1"], 1),
+        # Other payload types, including ones that share a prefix
+        (["a=fmtp:96 stereo=1"], 1),
+        (["a=fmtp:12 stereo=1"], 1),
+        (["a=fmtp:1211 stereo=1"], 1),
+        (["a=fmtp:96 stereo=1", "a=fmtp:121 stereo=0"], 1),
+        (["a=fmtp:96 stereo=0", "a=fmtp:121 stereo=1"], 2),
+    ],
+)
+def test_get_opus_channels(fmtp_lines, channels):
+    """Only stereo=1 on the fmtp line of the payload type means stereo."""
+    body = _CRLF.join(
+        ["v=0", "m=audio 5004 RTP/AVP 121 96", "a=rtpmap:121 opus/48000/2"]
+        + fmtp_lines
+        + [""]
+    )
+    assert get_opus_channels(body, 121) == channels
+
+
+def _invite_with_sdp(*sdp_lines: str) -> bytes:
+    """Build an INVITE with the given lines in place of its OPUS rtpmap."""
+    return _invite(f"SIP/2.0/UDP {_PEER[0]}:{_PEER[1]}").replace(
+        b"a=rtpmap:123 opus/48000/2", _CRLF.join(sdp_lines).encode()
+    )
+
+
+def test_invite_without_stereo_is_sent_mono():
+    """The offer of a Poly CCX 500, which has no stereo parameter."""
+    protocol, _ = _connected_protocol()
+
+    protocol.datagram_received(
+        _invite_with_sdp("a=rtpmap:121 opus/48000/2", _POLY_FMTP), _PEER
+    )
+
+    assert protocol.calls[0].opus_payload_type == 121
+    assert protocol.calls[0].opus_channels == 1
+
+
+def test_invite_without_fmtp_is_sent_mono():
+    """An offer with no fmtp line at all gets the RFC 7587 default."""
+    protocol, _ = _connected_protocol()
+
+    protocol.datagram_received(_invite_with_sdp("a=rtpmap:121 opus/48000/2"), _PEER)
+
+    assert protocol.calls[0].opus_channels == 1
+
+
+def test_invite_with_stereo_is_sent_stereo():
+    """The channel count in rtpmap is always 2, so fmtp is what decides."""
+    protocol, _ = _connected_protocol()
+
+    protocol.datagram_received(
+        _invite_with_sdp("a=rtpmap:121 opus/48000/2", "a=fmtp:121 stereo=1"), _PEER
+    )
+
+    assert protocol.calls[0].opus_channels == 2
+
+
+def test_invite_uses_fmtp_of_the_payload_type_answered():
+    """A second OPUS payload type's fmtp does not decide for the one we answer."""
+    protocol, _ = _connected_protocol()
+
+    protocol.datagram_received(
+        _invite_with_sdp(
+            "a=rtpmap:96 opus/48000/2",
+            "a=fmtp:96 stereo=1",
+            "a=rtpmap:121 opus/48000/2",
+        ),
+        _PEER,
+    )
+
+    assert protocol.calls[0].opus_payload_type == 121
+    assert protocol.calls[0].opus_channels == 1
+
+
+def test_answer_still_declares_two_rtpmap_channels():
+    """RFC 7587 requires "/2" in rtpmap, even when sending mono."""
+    protocol, transport = _connected_protocol()
+
+    protocol.datagram_received(
+        _invite_with_sdp("a=rtpmap:121 opus/48000/2", _POLY_FMTP), _PEER
+    )
+    transport.sendto.reset_mock()
+    protocol.answer(protocol.calls[0], 12345)
+
+    assert b"a=rtpmap:121 opus/48000/2" in transport.sendto.call_args[0][0]
