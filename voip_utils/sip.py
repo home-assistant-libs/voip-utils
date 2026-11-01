@@ -193,6 +193,8 @@ class CallInfo:
     via_port: int | None = None
     # Source address of the datagram this call arrived on. None for calls we placed.
     peer_address: Tuple[str, int] | None = None
+    # OPUS channels to send, from the caller's offer. Calls we placed stay stereo.
+    opus_channels: int = 2
 
     @property
     def caller_rtcp_port(self) -> int:
@@ -375,6 +377,24 @@ def get_rtp_info(body: str) -> RtpInfo:
         _LOGGER.debug("Using default payload type: %s", opus_payload_type)
 
     return RtpInfo(rtp_ip=rtp_ip, rtp_port=rtp_port, payload_type=opus_payload_type)
+
+
+def get_opus_channels(body: str, payload_type: int) -> int:
+    """Get the OPUS channels to send to the receiver of an SDP body.
+
+    Mono unless the a=fmtp line of the payload type has stereo=1 (RFC 7587).
+    """
+    fmtp_type = f"a=fmtp:{payload_type}"
+    for line in body.splitlines():
+        # a=fmtp:123 maxplaybackrate=16000; stereo=1
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2 or parts[0] != fmtp_type:
+            continue
+        for param in parts[1].split(";"):
+            key, _, value = param.partition("=")
+            if key.strip().lower() == "stereo":
+                return 2 if value.strip() == "1" else 1
+    return 1
 
 
 def get_header(headers: dict[str, str], name: str) -> tuple[str, str] | None:
@@ -687,6 +707,7 @@ class SipDatagramProtocol(asyncio.DatagramProtocol, ABC):
                         via_host=via_host,
                         via_port=via_port,
                         peer_address=addr,
+                        opus_channels=get_opus_channels(smsg.body, opus_payload_type),
                     )
                 )
             elif method is None:

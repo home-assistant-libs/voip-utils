@@ -8,7 +8,6 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable, Optional, Set, cast
 
 from .const import OPUS_PAYLOAD_TYPE
@@ -173,6 +172,14 @@ class VoipDatagramProtocol(SipDatagramProtocol):
 
         loop = asyncio.get_running_loop()
 
+        def create_rtp_protocol() -> asyncio.Protocol:
+            # A protocol may be reused across calls, and each caller has its own
+            # requirements. Done here so that even the first frame respects them.
+            protocol = protocol_factory(call_info, rtcp_state)
+            if isinstance(protocol, RtpDatagramProtocol):
+                protocol.set_output_channels(call_info.opus_channels)
+            return protocol
+
         # RTCP server
         _, rtcp_protocol = await loop.create_datagram_endpoint(
             lambda: RtcpDatagramProtocol(rtcp_state),
@@ -182,7 +189,7 @@ class VoipDatagramProtocol(SipDatagramProtocol):
 
         # RTP server
         _, rtp_protocol = await loop.create_datagram_endpoint(
-            partial(protocol_factory, call_info, rtcp_state),
+            create_rtp_protocol,
             (rtp_ip, rtp_port),
         )
         self._rtp_protocol = cast(RtpDatagramProtocol, rtp_protocol)
@@ -354,6 +361,10 @@ class RtpDatagramProtocol(asyncio.DatagramProtocol, ABC):
             _LOGGER.debug("Voip send audio timed out waiting for audio to play")
         else:
             _LOGGER.debug("Voip send audio finished sending")
+
+    def set_output_channels(self, channels: int) -> None:
+        """Set the number of OPUS channels sent to the other party."""
+        self._rtp_output.set_channels(channels)
 
     def make_silence_frame(self):
         """Make a frame of silence to keep RTP alive."""
